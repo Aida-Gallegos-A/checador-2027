@@ -1,0 +1,27 @@
+import express from 'express';
+import { rutasKiosco } from './routes/kiosco.js';
+import { rutasRh } from './routes/rh.js';
+import { rutasFirmas } from './routes/firmas.js';
+
+export function crearApp(db) {
+  const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use(express.json({ limit: '4mb' })); // las fotos llegan en base64
+
+  app.get('/api/salud', (_req, res) => res.json({ ok: true, hora_servidor: new Date() }));
+  app.use('/api/kiosco', rutasKiosco(db));
+  app.use('/api/rh', rutasRh(db));
+  app.use('/api/firmas', rutasFirmas(db));
+
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => {
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'La foto es demasiado grande' });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON inválido' });
+    console.error(err);
+    res.status(500).json({ error: 'Error interno' });
+  });
+  return app;
+}
