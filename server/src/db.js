@@ -1,5 +1,6 @@
 // Acceso a datos con la misma interfaz para PostgreSQL real (producción) y PGlite (desarrollo).
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -45,14 +46,44 @@ async function conPostgres(url) {
   };
 }
 
+/**
+ * PGlite corre dentro del proceso: solo un proceso puede abrir la carpeta a la vez.
+ * Guardamos nuestro PID en `<carpeta>.lock`. Si otro proceso vivo la tiene, no arrancamos.
+ * Si el dueño anterior ya murió (en Windows `node --watch` mata el proceso sin cerrar la base),
+ * su postmaster.pid quedó huérfano y PGlite no arrancaría: entonces sí es seguro quitarlo.
+ */
+async function tomarBloqueo(ruta) {
+  const candado = `${ruta}.lock`;
+  if (existsSync(candado)) {
+    const dueno = Number((await readFile(candado, 'utf8')).trim());
+    if (dueno && dueno !== process.pid && procesoVivo(dueno)) {
+      throw new Error(`La base local ya está abierta por otro servidor (proceso ${dueno}). Ciérralo antes de iniciar éste (si ya no existe, borra ${candado}).`);
+    }
+  }
+  const pid = path.join(ruta, 'postmaster.pid');
+  if (existsSync(pid)) {
+    await rm(pid, { force: true });
+    console.warn('PGlite: se quitó el bloqueo de un cierre anterior.');
+  }
+  await writeFile(candado, String(process.pid));
+  const soltar = () => { try { rmSync(candado, { force: true }); } catch { /* ya no existe */ } };
+  process.once('exit', soltar);
+}
+
+function procesoVivo(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
 async function conPglite(dir) {
   const { PGlite } = await import('@electric-sql/pglite');
   let pg;
   if (dir === 'memory') {
     pg = new PGlite();
   } else {
-    await mkdir(path.resolve(dir), { recursive: true });
-    pg = new PGlite(path.resolve(dir));
+    const ruta = path.resolve(dir);
+    await mkdir(ruta, { recursive: true });
+    await tomarBloqueo(ruta);
+    pg = new PGlite(ruta);
   }
   await pg.waitReady;
   return {

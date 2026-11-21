@@ -42,6 +42,9 @@ Abre http://localhost:5173
 - Correcciones: se solicitan con motivo, se aprueban o rechazan una sola vez, el original se conserva.
 - Firmas semanales: resumen con código de 6 dígitos (solo se guarda su HMAC), confirmar u objetar,
   recordatorios; todo queda en la bitácora.
+- Empleados: alta individual o **importación desde Excel/CSV** (plantilla descargable, vista previa con
+  errores por fila antes de guardar, actualización por número de empleado, PINs generados en Excel),
+  cambios, nuevo PIN y bajas; todo queda en la bitácora.
 - Panel: resumen con alertas, nómina en CSV y verificación de integridad.
 
 **Web** (`web/`, React + Vite): kiosco con cámara y cuenta regresiva, panel de RH y página de firma.

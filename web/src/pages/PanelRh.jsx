@@ -60,7 +60,7 @@ export default function PanelRh() {
 
       <main className="panel-contenido">
         {seccion === 'resumen' && datos && <Resumen datos={datos} semana={semana} onCambio={recargar} onAviso={setAviso} />}
-        {seccion === 'empleados' && <Empleados onCambio={recargar} onAviso={setAviso} />}
+        {seccion === 'empleados' && <Empleados empresa={datos?.empresa} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'correcciones' && <Correcciones version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'firmas' && semana && <Firmas semana={semana} version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'integridad' && semana && <Integridad semana={semana} />}

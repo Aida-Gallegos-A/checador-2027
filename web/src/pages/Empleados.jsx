@@ -1,12 +1,14 @@
 // Alta, cambios, PIN y baja de empleados. Cada movimiento queda en la bitácora.
 import { useEffect, useState } from 'react';
 import { MODALIDADES, rh } from '../api.js';
+import ImportarEmpleados from './ImportarEmpleados.jsx';
 
 const JORNADAS = { diurna: 'Diurna (8 h)', nocturna: 'Nocturna (7 h)', mixta: 'Mixta (7.5 h)' };
 const VACIO = { numero: '', nombre: '', puesto: '', telefono: '', modalidad: 'presencial', tipo_jornada: 'diurna', pin: '' };
 
-export default function Empleados({ onCambio, onAviso }) {
+export default function Empleados({ empresa, onCambio, onAviso }) {
   const [lista, setLista] = useState(null);
+  const [importando, setImportando] = useState(false);
   const [form, setForm] = useState(null); // null | { modo: 'alta' | 'editar', datos }
   const [verBajas, setVerBajas] = useState(false);
   const [error, setError] = useState(null);
@@ -60,7 +62,10 @@ export default function Empleados({ onCambio, onAviso }) {
   return (
     <>
       <div className="acciones acciones-entre">
-        <button className="boton" onClick={() => { setError(null); setForm({ modo: 'alta', datos: { ...VACIO } }); }}>+ Dar de alta</button>
+        <div className="acciones-grupo">
+          <button className="boton" onClick={() => { setError(null); setForm({ modo: 'alta', datos: { ...VACIO } }); }}>+ Dar de alta</button>
+          <button className="boton-secundario" onClick={() => setImportando(true)}>Importar desde Excel</button>
+        </div>
         {bajas > 0 && (
           <label className="casilla"><input type="checkbox" checked={verBajas} onChange={(e) => setVerBajas(e.target.checked)} /> Mostrar bajas ({bajas})</label>
         )}
@@ -89,6 +94,10 @@ export default function Empleados({ onCambio, onAviso }) {
         </table>
       </div>
       <p className="tenue">El teléfono se usa para mandar por WhatsApp el convenio y el resumen semanal a firmar. Sin teléfono no hay firma.</p>
+
+      {importando && (
+        <ImportarEmpleados empresa={empresa} onCerrar={() => setImportando(false)} onImportado={() => { cargar(); onCambio(); }} />
+      )}
 
       {form && (
         <div className="modal-fondo" onClick={() => setForm(null)}>

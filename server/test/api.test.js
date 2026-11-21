@@ -146,6 +146,50 @@ test('empleados: alta con PIN generado, cambio de PIN, edición y baja', async (
   assert.deepEqual(rows.map((r) => r.asunto), ['alta_empleado', 'cambio_pin', 'cambio_empleado', 'baja_empleado']);
 });
 
+test('importación: vista previa sin guardar, errores por fila, alta y actualización', async () => {
+  const filas = [
+    { fila: 2, numero: '010', nombre: '  Laura   Méndez ', modalidad: 'Campo', jornada: 'Nocturna', telefono: '55 1234 5678' },
+    { fila: 3, numero: '011', nombre: 'Carlos Ortiz', modalidad: 'oficina', telefono: '' },
+    { fila: 4, numero: '012', nombre: 'Sofía Herrera', modalidad: 'Home Office', pin: '77' },
+    { fila: 5, numero: '010', nombre: 'Repetido', modalidad: 'Campo' },
+    { fila: 6, numero: '', nombre: 'Sin número', modalidad: 'marte' },
+    { fila: 7, numero: '1', nombre: 'Juan Pérez', modalidad: 'presencial', puesto: 'Supervisor' }, // ya existe
+    { fila: 8, numero: '013', nombre: 'Tel malo', modalidad: 'campo', telefono: '123' },
+  ];
+  const previa = await api('POST', '/rh/empleados/importar', RH, { filas });
+  assert.equal(previa.status, 200);
+  assert.deepEqual(previa.body.resumen, { total: 7, crear: 3, actualizar: 1, sin_cambios: 0, errores: 3 });
+  const porFila = Object.fromEntries(previa.body.filas.map((f) => [f.fila, f]));
+  assert.equal(porFila[2].nombre, 'Laura Méndez');
+  assert.equal(porFila[2].telefono, '+525512345678');
+  assert.equal(porFila[2].tipo_jornada, 'nocturna');
+  assert.equal(porFila[3].modalidad, 'presencial');
+  assert.ok(porFila[3].avisos.some((a) => /Sin teléfono/.test(a)));
+  assert.match(porFila[5].errores[0], /repetido.*fila 2/i);
+  assert.equal(porFila[6].errores.length, 2);
+  assert.deepEqual(porFila[7].cambios, { puesto: { antes: null, despues: 'Supervisor' } });
+  assert.match(porFila[8].errores[0], /Teléfono/);
+
+  const antes = (await db.query(`SELECT count(*)::int AS n FROM empleados`)).rows[0].n;
+  assert.equal(antes, 2, 'la vista previa no guarda nada');
+
+  const r = await api('POST', '/rh/empleados/importar', RH, { filas, confirmar: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.creados.length, 3);
+  assert.equal(r.body.creados.find((c) => c.numero === '012').pin, '0077', 'Excel quita ceros: se rellena');
+  assert.equal(new Set(r.body.creados.map((c) => c.pin)).size, 3);
+
+  const laura = r.body.creados.find((c) => c.numero === '010');
+  const id = await api('POST', '/kiosco/identificar', KIOSCO, { pin: laura.pin });
+  assert.equal(id.body.empleado.nombre, 'Laura Méndez');
+
+  const { rows: [juan] } = await db.query(`SELECT puesto FROM empleados WHERE numero = '1'`);
+  assert.equal(juan.puesto, 'Supervisor');
+
+  const otraVez = await api('POST', '/rh/empleados/importar', RH, { filas: filas.slice(0, 3) });
+  assert.equal(otraVez.body.resumen.sin_cambios, 3, 'subir el mismo archivo otra vez no duplica');
+});
+
 test('la cadena está íntegra y detecta una alteración directa en la base', async () => {
   const v = await api('GET', '/rh/cadena/verificar', RH);
   assert.equal(v.body.integra, true);

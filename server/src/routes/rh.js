@@ -102,7 +102,7 @@ export function rutasRh(db) {
         const { rows: [e] } = await tx.query(
           `INSERT INTO empleados (empresa_id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, pin_indice)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${COLUMNAS_EMP}`,
-          [req.empresa.id, String(b.numero).trim(), b.nombre.trim(), limpio(b.puesto), limpio(b.telefono),
+          [req.empresa.id, String(b.numero).trim(), b.nombre.trim(), limpio(b.puesto), normalizarTelefono(b.telefono),
             b.modalidad, b.tipo_jornada ?? 'diurna', indicePin(req.empresa.id, pin)],
         );
         await agregarEvento(tx, {
@@ -132,7 +132,7 @@ export function rutasRh(db) {
       const nuevo = {
         nombre: b.nombre !== undefined ? b.nombre.trim() : antes.nombre,
         puesto: b.puesto !== undefined ? limpio(b.puesto) : antes.puesto,
-        telefono: b.telefono !== undefined ? limpio(b.telefono) : antes.telefono,
+        telefono: b.telefono !== undefined ? normalizarTelefono(b.telefono) : antes.telefono,
         modalidad: b.modalidad ?? antes.modalidad,
         tipo_jornada: b.tipo_jornada ?? antes.tipo_jornada,
         activo: typeof b.activo === 'boolean' ? b.activo : antes.activo,
@@ -155,6 +155,103 @@ export function rutasRh(db) {
     });
     if (!resultado) return res.status(404).json({ error: 'Empleado no encontrado' });
     res.json(resultado);
+  });
+
+  // Importación masiva (Excel/CSV leído en el navegador). Dos pasos:
+  //   confirmar=false → valida todo y devuelve vista previa por fila (no guarda nada)
+  //   confirmar=true  → guarda las filas válidas en una sola transacción y devuelve los PINs generados
+  // Si el número de empleado ya existe, se actualizan sus datos (nunca su PIN).
+  r.post('/empleados/importar', async (req, res) => {
+    const filas = req.body?.filas;
+    if (!Array.isArray(filas) || filas.length === 0) return res.status(400).json({ error: 'El archivo no tiene filas' });
+    if (filas.length > 3000) return res.status(400).json({ error: 'Máximo 3,000 empleados por archivo' });
+    const confirmar = req.body.confirmar === true;
+    const registradoPor = limpio(req.body.registrado_por) ?? 'RH';
+
+    const { rows: existentes } = await db.query(
+      `SELECT id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, activo, pin_indice FROM empleados WHERE empresa_id = $1`,
+      [req.empresa.id],
+    );
+    const porNumero = new Map(existentes.map((e) => [e.numero, e]));
+    const pinesUsados = new Set(existentes.map((e) => e.pin_indice).filter(Boolean));
+    const numerosVistos = new Map();
+
+    const analisis = filas.map((f, i) => {
+      const fila = Number(f?.fila) || i + 2;
+      const errores = [];
+      const avisos = [];
+      const d = normalizarFila(f ?? {}, errores);
+
+      if (d.numero) {
+        if (numerosVistos.has(d.numero)) errores.push(`Número repetido en el archivo (también en la fila ${numerosVistos.get(d.numero)})`);
+        else numerosVistos.set(d.numero, fila);
+      }
+      const existente = d.numero ? porNumero.get(d.numero) : null;
+      if (existente && !existente.activo) errores.push('Este número está dado de baja; reactívalo desde la lista de empleados');
+
+      let accion = 'crear';
+      let cambios = null;
+      if (existente) {
+        if (d.pin) avisos.push('Ya existe: el PIN del archivo se ignora (usa "Nuevo PIN")');
+        cambios = {};
+        for (const k of ['nombre', 'puesto', 'telefono', 'modalidad', 'tipo_jornada']) {
+          // Celda vacía en el archivo = no tocar el dato actual.
+          if (d[k] !== null && d[k] !== existente[k]) cambios[k] = { antes: existente[k], despues: d[k] };
+        }
+        accion = Object.keys(cambios).length ? 'actualizar' : 'sin_cambios';
+      } else if (d.pin && errores.length === 0) {
+        const idx = indicePin(req.empresa.id, d.pin);
+        if (pinesUsados.has(idx)) errores.push('Ese PIN ya lo usa otra persona');
+        else pinesUsados.add(idx);
+      }
+      if (!existente && !d.telefono) avisos.push('Sin teléfono: no podrá firmar por WhatsApp');
+
+      return { fila, ...d, accion: errores.length ? 'error' : accion, errores, avisos, cambios, existente };
+    });
+
+    const resumen = {
+      total: analisis.length,
+      crear: analisis.filter((a) => a.accion === 'crear').length,
+      actualizar: analisis.filter((a) => a.accion === 'actualizar').length,
+      sin_cambios: analisis.filter((a) => a.accion === 'sin_cambios').length,
+      errores: analisis.filter((a) => a.accion === 'error').length,
+    };
+    const publico = (a) => ({
+      fila: a.fila, numero: a.numero, nombre: a.nombre, puesto: a.puesto, telefono: a.telefono,
+      modalidad: a.modalidad, tipo_jornada: a.tipo_jornada, accion: a.accion, errores: a.errores, avisos: a.avisos, cambios: a.cambios,
+    });
+    if (!confirmar) return res.json({ resumen, filas: analisis.map(publico) });
+
+    const creados = await db.transaction(async (tx) => {
+      const nuevos = [];
+      for (const a of analisis) {
+        if (a.accion === 'crear') {
+          const pin = a.pin ?? pinAleatorio(req.empresa.id, pinesUsados);
+          const { rows: [e] } = await tx.query(
+            `INSERT INTO empleados (empresa_id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, pin_indice)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, numero, nombre`,
+            [req.empresa.id, a.numero, a.nombre, a.puesto, a.telefono, a.modalidad, a.tipo_jornada ?? 'diurna', indicePin(req.empresa.id, pin)],
+          );
+          await agregarEvento(tx, {
+            empresa_id: req.empresa.id, empleado_id: e.id, clase: 'nota',
+            datos: { asunto: 'alta_empleado', origen: 'importacion_excel', fila: a.fila, numero: e.numero, nombre: e.nombre, modalidad: a.modalidad, tipo_jornada: a.tipo_jornada ?? 'diurna', registrado_por: registradoPor },
+          });
+          nuevos.push({ fila: a.fila, numero: e.numero, nombre: e.nombre, pin });
+        } else if (a.accion === 'actualizar') {
+          const v = (k) => (a.cambios[k] ? a.cambios[k].despues : a.existente[k]);
+          await tx.query(
+            `UPDATE empleados SET nombre = $2, puesto = $3, telefono = $4, modalidad = $5, tipo_jornada = $6 WHERE id = $1`,
+            [a.existente.id, v('nombre'), v('puesto'), v('telefono'), v('modalidad'), v('tipo_jornada')],
+          );
+          await agregarEvento(tx, {
+            empresa_id: req.empresa.id, empleado_id: a.existente.id, clase: 'nota',
+            datos: { asunto: 'cambio_empleado', origen: 'importacion_excel', fila: a.fila, cambios: a.cambios, registrado_por: registradoPor },
+          });
+        }
+      }
+      return nuevos;
+    });
+    res.json({ resumen, creados });
   });
 
   // Nuevo PIN (olvido o sospecha de que alguien más lo usa). El PIN nunca se guarda en claro.
@@ -389,20 +486,80 @@ function validarEmpleado(b, { alta }) {
   if (b.modalidad !== undefined && !MODALIDADES.includes(b.modalidad)) return 'Modalidad inválida';
   if (b.tipo_jornada !== undefined && !JORNADAS.includes(b.tipo_jornada)) return 'Tipo de jornada inválido';
   if (b.pin && !/^\d{4}$/.test(String(b.pin))) return 'El PIN debe tener 4 dígitos';
-  if (b.telefono && !/^\+?[\d\s-]{10,16}$/.test(String(b.telefono))) return 'Teléfono inválido (10 dígitos, con o sin +52)';
+  if (b.telefono && normalizarTelefono(b.telefono) === undefined) return 'Teléfono inválido (10 dígitos, con o sin +52)';
   return null;
 }
 
+const PINES_OBVIOS = new Set(['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '1234', '4321', '2580', '1212']);
+
 /** PIN de 4 dígitos que nadie más usa en la empresa (evita los obvios). */
 async function pinLibre(db, empresaId) {
-  const obvios = new Set(['0000', '1111', '1234', '4321', '9999', '2580']);
-  for (let i = 0; i < 50; i++) {
+  const { rows } = await db.query(`SELECT pin_indice FROM empleados WHERE empresa_id = $1 AND pin_indice IS NOT NULL`, [empresaId]);
+  return pinAleatorio(empresaId, new Set(rows.map((r) => r.pin_indice)));
+}
+
+/** Igual, contra un conjunto en memoria (lo actualiza). Útil para importaciones grandes. */
+function pinAleatorio(empresaId, usados) {
+  if (usados.size > 8000) throw new Error('Quedan pocos PINs de 4 dígitos libres; usa gafete con QR o PIN más largo');
+  for (let i = 0; i < 1000; i++) {
     const pin = String(randomInt(0, 10_000)).padStart(4, '0');
-    if (obvios.has(pin)) continue;
-    const { rows } = await db.query(`SELECT 1 FROM empleados WHERE empresa_id = $1 AND pin_indice = $2`, [empresaId, indicePin(empresaId, pin)]);
-    if (rows.length === 0) return pin;
+    if (PINES_OBVIOS.has(pin)) continue;
+    const idx = indicePin(empresaId, pin);
+    if (!usados.has(idx)) { usados.add(idx); return pin; }
   }
   throw new Error('No se encontró un PIN libre');
+}
+
+const sinAcentos = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+/** Teléfono a formato +52XXXXXXXXXX. Devuelve null si viene vacío, o undefined si no es válido. */
+export function normalizarTelefono(valor) {
+  const digitos = String(valor ?? '').replace(/\D/g, '');
+  if (!digitos) return null;
+  if (digitos.length === 10) return `+52${digitos}`;
+  if (digitos.length === 12 && digitos.startsWith('52')) return `+${digitos}`;
+  if (digitos.length === 13 && digitos.startsWith('521')) return `+52${digitos.slice(3)}`;
+  return undefined;
+}
+
+const MAPA_MODALIDAD = {
+  presencial: 'presencial', oficina: 'presencial', planta: 'presencial', tienda: 'presencial', sucursal: 'presencial',
+  campo: 'campo', ruta: 'campo', foraneo: 'campo', guardia: 'campo', chofer: 'campo', tecnico: 'campo',
+  'home office': 'home_office', home_office: 'home_office', homeoffice: 'home_office', remoto: 'home_office',
+  teletrabajo: 'home_office', 'en casa': 'home_office', casa: 'home_office', hibrido: 'home_office',
+};
+const MAPA_JORNADA = { diurna: 'diurna', dia: 'diurna', nocturna: 'nocturna', noche: 'nocturna', mixta: 'mixta' };
+
+/** Limpia y valida una fila del archivo. Los campos vacíos opcionales quedan en null. */
+export function normalizarFila(f, errores) {
+  const texto = (v) => (v === null || v === undefined ? '' : String(v).replace(/\s+/g, ' ').trim());
+  const numero = texto(f.numero);
+  const nombre = texto(f.nombre);
+  if (!numero) errores.push('Falta el número de empleado');
+  if (!nombre) errores.push('Falta el nombre');
+
+  let modalidad = null;
+  if (texto(f.modalidad)) {
+    modalidad = MAPA_MODALIDAD[sinAcentos(f.modalidad)] ?? null;
+    if (!modalidad) errores.push(`Modalidad "${texto(f.modalidad)}" no reconocida (usa presencial, campo o home office)`);
+  } else {
+    errores.push('Falta la modalidad');
+  }
+
+  let tipo_jornada = null;
+  if (texto(f.jornada)) {
+    tipo_jornada = MAPA_JORNADA[sinAcentos(f.jornada)] ?? null;
+    if (!tipo_jornada) errores.push(`Jornada "${texto(f.jornada)}" no reconocida (usa diurna, nocturna o mixta)`);
+  }
+
+  const telefono = normalizarTelefono(f.telefono);
+  if (telefono === undefined) errores.push(`Teléfono "${texto(f.telefono)}" inválido (10 dígitos)`);
+
+  let pin = texto(f.pin) || null;
+  if (pin && /^\d{1,3}$/.test(pin)) pin = pin.padStart(4, '0'); // Excel quita los ceros a la izquierda
+  if (pin && !/^\d{4}$/.test(pin)) { errores.push('El PIN debe tener 4 dígitos'); pin = null; }
+
+  return { numero, nombre, puesto: texto(f.puesto) || null, telefono: telefono ?? null, modalidad, tipo_jornada, pin };
 }
 
 const TEXTO_BANDERA = {

@@ -36,6 +36,7 @@ export const rh = {
   empleados: () => pedir('GET', '/rh/empleados', { headers: rhHeaders() }),
   altaEmpleado: (body) => pedir('POST', '/rh/empleados', { body, headers: rhHeaders() }),
   editarEmpleado: (id, body) => pedir('PATCH', `/rh/empleados/${id}`, { body, headers: rhHeaders() }),
+  importarEmpleados: (body) => pedir('POST', '/rh/empleados/importar', { body, headers: rhHeaders() }),
   nuevoPin: (id, body = {}) => pedir('POST', `/rh/empleados/${id}/pin`, { body, headers: rhHeaders() }),
   semanaEmpleado: (id, semana) => pedir('GET', `/rh/empleados/${id}/semana?semana=${semana}`, { headers: rhHeaders() }),
   correcciones: () => pedir('GET', '/rh/correcciones', { headers: rhHeaders() }),
