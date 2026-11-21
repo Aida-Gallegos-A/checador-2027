@@ -1,7 +1,7 @@
 // Consultas de negocio sobre la bitácora. Todo estado (correcciones, firmas) se deriva de eventos.
 import {
   alertasSemana, calcularJornadas, calcularSemana, checadasEfectivas,
-  fechaLocal, inicioDelDiaLocal, lunesDe, sumarDias,
+  fechaLocal, inicioDelDiaLocal, LUGARES_REMOTOS, lunesDe, sumarDias, UMBRAL_NOM037,
 } from './lib/jornada.js';
 
 export const TIPOS_CHECADA = ['entrada', 'salida_comida', 'regreso_comida', 'salida'];
@@ -61,6 +61,39 @@ export async function semanasDeEmpleados(db, empresa, empleados, lunes) {
       .flatMap((e) => (e.datos.banderas ?? []).map((b) => ({ bandera: b, evento: e.id, hora: e.hora })));
     return { empleado: emp, lunes, domingo, jornadas, sueltas, semana, alertas: alertasSemana(semana, emp.nombre), banderas };
   });
+}
+
+/**
+ * Porcentaje de trabajo fuera del centro de trabajo en las 4 semanas que terminan en `lunes`
+ * (solo para quien tiene modalidad remota o registró tiempo remoto). Base para la NOM-037.
+ */
+export async function remotoUltimasSemanas(db, empresa, empleados, lunes, semanas = 4) {
+  const acumulado = new Map();
+  for (let i = semanas - 1; i >= 0; i--) {
+    const l = sumarDias(lunes, -7 * i);
+    for (const s of await semanasDeEmpleados(db, empresa, empleados, l)) {
+      const a = acumulado.get(s.empleado.id) ?? { total: 0, porLugar: {}, dias: {} };
+      a.total += s.semana.total;
+      for (const [k, v] of Object.entries(s.semana.horasPorLugar)) a.porLugar[k] = (a.porLugar[k] ?? 0) + v;
+      for (const [k, v] of Object.entries(s.semana.diasPorLugar)) a.dias[k] = (a.dias[k] ?? 0) + v;
+      acumulado.set(s.empleado.id, a);
+    }
+  }
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const resultado = new Map();
+  for (const emp of empleados) {
+    const a = acumulado.get(emp.id);
+    const remoto = LUGARES_REMOTOS.reduce((n, k) => n + (a?.porLugar[k] ?? 0), 0);
+    if (!a || (remoto === 0 && !['home_office', 'hibrido'].includes(emp.modalidad))) continue;
+    const porcentaje = a.total ? Math.round((remoto / a.total) * 100) : 0;
+    resultado.set(emp.id, {
+      semanas, desde: sumarDias(lunes, -7 * (semanas - 1)), hasta: sumarDias(lunes, 6),
+      horas_totales: r2(a.total), horas_remotas: r2(remoto), porcentaje,
+      horas_por_lugar: Object.fromEntries(Object.entries(a.porLugar).map(([k, v]) => [k, r2(v)])),
+      dias: a.dias, aplica_nom037: porcentaje > UMBRAL_NOM037,
+    });
+  }
+  return resultado;
 }
 
 export async function empleadosActivos(db, empresaId) {

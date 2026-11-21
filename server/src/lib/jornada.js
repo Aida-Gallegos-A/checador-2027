@@ -78,9 +78,25 @@ export function checadasEfectivas(eventos) {
       origen: e.clase === 'correccion_aprobada' ? 'correccion' : e.datos.origen,
       banderas: e.datos.banderas ?? [],
       corregida: e.clase === 'correccion_aprobada',
+      lugar: lugarDe(e),
     }))
     .sort((a, b) => a.hora - b.hora);
 }
+
+/**
+ * Dónde se trabajó: 'oficina' (kiosco del centro de trabajo), 'casa' u 'otro' (remoto, cuenta para la NOM-037),
+ * 'campo' (app en ruta o con clientes: no es teletrabajo) o 'sin_dato'.
+ */
+export function lugarDe(e) {
+  if (e.datos?.lugar) return e.datos.lugar;
+  const origen = e.datos?.origen;
+  if (origen === 'kiosco') return 'oficina';
+  if (origen === 'web') return 'casa';
+  if (origen === 'app') return 'campo';
+  return 'sin_dato';
+}
+
+export const LUGARES_REMOTOS = ['casa', 'otro'];
 
 // ---------- Jornadas ----------
 
@@ -107,14 +123,14 @@ export function calcularJornadas(checadas, zona = 'America/Mexico_City') {
         if (actual) cerrar('entrada_sin_salida');
         actual = {
           fecha: fechaLocal(c.hora, zona), entrada: c.hora, salida: null,
-          msTrabajados: 0, msComida: 0, inicioTramo: t, inicioComida: null,
+          msTrabajados: 0, msComida: 0, inicioTramo: t, inicioComida: null, lugarTramo: c.lugar, msPorLugar: {},
           incidencias: [], checadas: [c.id],
         };
         break;
       case 'salida_comida':
         if (!actual || actual.inicioComida !== null) { sueltas.push({ checada: c.id, incidencia: 'salida_comida_sin_jornada' }); break; }
         actual.checadas.push(c.id);
-        actual.msTrabajados += t - actual.inicioTramo;
+        sumarTramo(actual, t);
         actual.inicioTramo = null;
         actual.inicioComida = t;
         break;
@@ -124,6 +140,7 @@ export function calcularJornadas(checadas, zona = 'America/Mexico_City') {
         actual.msComida += t - actual.inicioComida;
         actual.inicioComida = null;
         actual.inicioTramo = t;
+        actual.lugarTramo = c.lugar;
         break;
       case 'salida':
         if (!actual) { sueltas.push({ checada: c.id, incidencia: 'salida_sin_entrada' }); break; }
@@ -132,7 +149,7 @@ export function calcularJornadas(checadas, zona = 'America/Mexico_City') {
           actual.msComida += t - actual.inicioComida;
           actual.incidencias.push('salio_sin_regresar_de_comida');
         } else {
-          actual.msTrabajados += t - actual.inicioTramo;
+          sumarTramo(actual, t);
         }
         actual.salida = c.hora;
         actual.inicioTramo = null;
@@ -150,6 +167,13 @@ export function calcularJornadas(checadas, zona = 'America/Mexico_City') {
   return { jornadas, sueltas };
 }
 
+function sumarTramo(j, t) {
+  const ms = t - j.inicioTramo;
+  j.msTrabajados += ms;
+  const lugar = j.lugarTramo ?? 'sin_dato';
+  j.msPorLugar[lugar] = (j.msPorLugar[lugar] ?? 0) + ms;
+}
+
 function finalizar(j) {
   const incompleta = j.salida === null;
   return {
@@ -159,6 +183,7 @@ function finalizar(j) {
     // Si está incompleta solo cuentan los tramos cerrados; el resto lo resuelve una corrección.
     minutosTrabajados: Math.round(j.msTrabajados / 60000),
     minutosComida: Math.round(j.msComida / 60000),
+    minutosPorLugar: Object.fromEntries(Object.entries(j.msPorLugar).map(([k, v]) => [k, Math.round(v / 60000)])),
     incompleta,
     incidencias: j.incidencias,
     checadas: j.checadas,
@@ -189,6 +214,10 @@ export function calcularSemana(jornadas, { anio, tipoJornada = 'diurna' }) {
   const doblesMin = Math.min(extraMin, regla.extraMaxSemanal * 60);
   const triplesMin = extraMin - doblesMin;
 
+  const porLugar = {};
+  for (const j of jornadas) for (const [k, v] of Object.entries(j.minutosPorLugar ?? {})) porLugar[k] = (porLugar[k] ?? 0) + v;
+  const remotoMin = LUGARES_REMOTOS.reduce((n, k) => n + (porLugar[k] ?? 0), 0);
+
   return {
     regla,
     dias: jornadas.length,
@@ -197,8 +226,27 @@ export function calcularSemana(jornadas, { anio, tipoJornada = 'diurna' }) {
     extraDobles: horas(doblesMin),
     extraTriples: horas(triplesMin),
     incompletas: jornadas.filter((j) => j.incompleta).length,
+    horasPorLugar: Object.fromEntries(Object.entries(porLugar).map(([k, v]) => [k, horas(v)])),
+    porcentajeRemoto: totalMin ? Math.round((remotoMin / totalMin) * 100) : 0,
+    diasPorLugar: contarDias(jornadas),
   };
 }
+
+/** Días según dónde se trabajó la mayor parte; 'mixto' si hubo tramos remotos y en oficina. */
+function contarDias(jornadas) {
+  const dias = {};
+  for (const j of jornadas) {
+    const p = j.minutosPorLugar ?? {};
+    const remoto = LUGARES_REMOTOS.some((k) => p[k] > 0);
+    const oficina = (p.oficina ?? 0) > 0;
+    const tipo = remoto && oficina ? 'mixto' : remoto ? 'remoto' : oficina ? 'oficina' : Object.keys(p)[0] ?? 'sin_dato';
+    dias[tipo] = (dias[tipo] ?? 0) + 1;
+  }
+  return dias;
+}
+
+/** NOM-037-STPS-2023: aplica a quien trabaja más del 40% de su tiempo fuera del centro de trabajo. */
+export const UMBRAL_NOM037 = 40;
 
 /** Alertas para actuar antes de incumplir. */
 export function alertasSemana(semana, nombre = 'El trabajador') {

@@ -3,6 +3,7 @@ import Kiosco from './pages/Kiosco.jsx';
 import PanelRh from './pages/PanelRh.jsx';
 import Firma from './pages/Firma.jsx';
 import Convenio from './pages/Convenio.jsx';
+import MiChecador from './pages/MiChecador.jsx';
 
 function useRuta() {
   const [ruta, setRuta] = useState(() => location.hash.slice(1) || '/');
@@ -18,6 +19,7 @@ export default function App() {
   const ruta = useRuta();
   if (ruta.startsWith('/kiosco')) return <Kiosco />;
   if (ruta.startsWith('/rh')) return <PanelRh />;
+  if (ruta.startsWith('/mi')) return <MiChecador />;
   const firma = /^\/firma\/(\d+)/.exec(ruta);
   if (firma) return <Firma resumenId={Number(firma[1])} />;
   const convenio = /^\/convenio\/(\d+)/.exec(ruta);
@@ -32,6 +34,10 @@ export default function App() {
         <a href="#/kiosco" className="tarjeta-opcion">
           <strong>Kiosco</strong>
           <span>Tablet en la entrada: PIN y foto automática.</span>
+        </a>
+        <a href="#/mi" className="tarjeta-opcion">
+          <strong>Mi checador</strong>
+          <span>Para el trabajador: registrar desde casa u otro lugar (home office e híbridos).</span>
         </a>
         <a href="#/rh" className="tarjeta-opcion">
           <strong>Panel de RH</strong>

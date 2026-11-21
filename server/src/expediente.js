@@ -7,13 +7,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import PDFDocument from 'pdfkit';
 import { agregarEvento, verificarCadena } from './lib/cadena.js';
-import { inicioDelDiaLocal, lunesDe, sumarDias } from './lib/jornada.js';
+import { inicioDelDiaLocal, LUGARES_REMOTOS, lugarDe, lunesDe, sumarDias, UMBRAL_NOM037 } from './lib/jornada.js';
 import { estadoFirmas, listarCorrecciones, semanasDeEmpleados } from './servicios.js';
 
 const C = { marca: '#123D33', acento: '#15805C', texto: '#18211E', tenue: '#5D6964', borde: '#DFE5E1', fondo: '#F3F6F4', critico: '#B42318', alerta: '#B45309' };
 const MARGEN = 50;
 const canal = (c) => ({ whatsapp: 'WhatsApp', sms: 'SMS' }[c] ?? c ?? '-');
-const MODALIDAD = { presencial: 'Presencial', campo: 'Campo', home_office: 'Home office' };
+const MODALIDAD = { presencial: 'Presencial', campo: 'Campo', home_office: 'Home office', hibrido: 'Híbrido (oficina y a distancia, sin días fijos)' };
 const TIPO = { entrada: 'Entrada', salida_comida: 'Salida a comer', regreso_comida: 'Regreso de comer', salida: 'Salida' };
 const BANDERA = {
   sin_foto: 'sin foto', hora_dispositivo_no_cuadra: 'reloj del dispositivo desfasado', secuencia_irregular: 'fuera de secuencia',
@@ -75,6 +75,22 @@ export async function generarExpediente(db, empresa, { empleadoId, desde, hasta,
     dobles: t.dobles + s.semana.extraDobles, triples: t.triples + s.semana.extraTriples,
   }), { dias: 0, total: 0, ordinarias: 0, dobles: 0, triples: 0 });
   const r2 = (n) => Math.round(n * 100) / 100;
+
+  // Lugar de trabajo en el periodo (base para la NOM-037).
+  const porLugar = {};
+  const diasLugar = {};
+  for (const s of semanas) {
+    for (const [k, v] of Object.entries(s.semana.horasPorLugar ?? {})) porLugar[k] = (porLugar[k] ?? 0) + v;
+    for (const [k, v] of Object.entries(s.semana.diasPorLugar ?? {})) diasLugar[k] = (diasLugar[k] ?? 0) + v;
+  }
+  const horasRemotas = LUGARES_REMOTOS.reduce((n, k) => n + (porLugar[k] ?? 0), 0);
+  const pctRemoto = totales.total ? Math.round((horasRemotas / totales.total) * 100) : 0;
+  const muestraLugar = ['home_office', 'hibrido'].includes(emp.modalidad) || horasRemotas > 0;
+  const LUGAR = { oficina: 'centro de trabajo', casa: 'domicilio', otro: 'otro lugar', campo: 'campo', sin_dato: 'sin dato' };
+  const DIA = { oficina: 'en el centro de trabajo', remoto: 'a distancia', mixto: 'mixtos', campo: 'en campo', sin_dato: 'sin dato' };
+  const textoLugar = Object.entries(porLugar).filter(([, v]) => v > 0).map(([k, v]) => `${r2(v)} h ${LUGAR[k] ?? k}`).join(' · ');
+  const textoDias = Object.entries(diasLugar)
+    .map(([k, v]) => (k === 'mixto' ? `${v} ${v === 1 ? 'mixto' : 'mixtos'}` : `${v} ${DIA[k] ?? k}`)).join(' · ');
 
   const correcciones = (await listarCorrecciones(db, empresa.id))
     .filter((c) => c.empleado_id === emp.id
@@ -204,10 +220,11 @@ export async function generarExpediente(db, empresa, { empleadoId, desde, hasta,
     ['Registros en el periodo', `${checadas.length} (${checadas.filter((c) => c.clase === 'correccion_aprobada').length} por corrección aprobada)`],
     ['Correcciones', `${correcciones.length} solicitadas`],
     ['Fotografías', fotos.length ? `${fotos.filter((f) => f.estado === 'integra').length} de ${fotos.length} verificadas contra su huella` : 'No aplica'],
+    ...(muestraLugar ? [['Trabajo a distancia', `${pctRemoto}% del tiempo (${pctRemoto > UMBRAL_NOM037 ? 'le aplica la NOM-037' : 'no supera el umbral de la NOM-037'})`]] : []),
   ]);
   doc.moveDown(0.5);
   nota('Contenido: 1. Convenio y aviso de privacidad · 2. Resumen semanal y firmas · 3. Registro diario con evidencia · 4. Correcciones · '
-    + `5. Constancias de envío y firma${emp.modalidad === 'home_office' ? ' · 6. Teletrabajo (NOM-037)' : ''} · Anexo A. Textos firmados · Anexo B. Verificación de eventos.`);
+    + `5. Constancias de envío y firma${muestraLugar ? ' · 6. Trabajo a distancia (NOM-037)' : ''} · Anexo A. Textos firmados · Anexo B. Verificación de eventos.`);
 
   // ---------- 1. Convenio ----------
   titulo(1, 'Convenio de registro electrónico y aviso de privacidad');
@@ -263,17 +280,23 @@ export async function generarExpediente(db, empresa, { empleadoId, desde, hasta,
     if (e.clase === 'correccion_aprobada') partes2.push(`Corrección #${e.datos.correccion_id}: pidió ${e.datos.solicitado_por}, aprobó ${e.datos.decidido_por}`);
     if (ev.foto_sha256) partes2.push(`Foto ${ev.foto_sha256.slice(0, 12)}... (${{ integra: 'verificada', alterada: 'NO COINCIDE', no_encontrada: 'archivo no localizado' }[estadoFoto.get(e.id)] ?? ''})`);
     if (ev.gps) partes2.push(`GPS ${ev.gps.lat}, ${ev.gps.lng} (+/- ${ev.gps.precision_m ?? '?'} m)`);
-    if (ev.ip) partes2.push(`IP ${ev.ip}`);
+    if (ev.ip) partes2.push(`IP ${ev.ip}${ev.dispositivo ? ` · ${ev.dispositivo}` : ''}`);
     if (e.datos.hora_dispositivo) partes2.push(`Hora del dispositivo ${hora(e.datos.hora_dispositivo)}`);
     if ((e.datos.banderas ?? []).length) partes2.push(`Revisar: ${e.datos.banderas.map((b) => BANDERA[b] ?? b).join(', ')}`);
     if (reemplazadaPor.has(e.id)) partes2.push(`REEMPLAZADO por el evento ${reemplazadaPor.get(e.id)}`);
     return partes2.join('\n') || '-';
   };
+  const LUGAR_CORTO = { oficina: 'Oficina', casa: 'Casa', otro: 'Otro lugar', campo: 'Campo', sin_dato: '' };
   const ORIGEN = { kiosco: 'Kiosco', app: 'App', web: 'Web', demo: 'Demo' };
   tabla(
-    [{ t: 'Fecha', w: 0.17 }, { t: 'Hora', w: 0.13 }, { t: 'Registro', w: 0.13 }, { t: 'Origen', w: 0.09 }, { t: 'Evidencia', w: 0.40 }, { t: 'Evento', w: 0.08 }],
+    [{ t: 'Fecha', w: 0.17 }, { t: 'Hora', w: 0.13 }, { t: 'Registro', w: 0.13 }, { t: muestraLugar ? 'Origen / lugar' : 'Origen', w: 0.11 }, { t: 'Evidencia', w: 0.38 }, { t: 'Evento', w: 0.08 }],
     checadas.map((e) => ({
-      celdas: [fecha(e.hora), hora(e.hora), TIPO[e.datos.tipo] ?? e.datos.tipo, e.clase === 'correccion_aprobada' ? 'Corrección' : ORIGEN[e.datos.origen] ?? e.datos.origen, evidencia(e), e.id],
+      celdas: [
+        fecha(e.hora), hora(e.hora), TIPO[e.datos.tipo] ?? e.datos.tipo,
+        (e.clase === 'correccion_aprobada' ? 'Corrección' : ORIGEN[e.datos.origen] ?? e.datos.origen)
+          + (muestraLugar ? `\n${LUGAR_CORTO[lugarDe(e)] ?? ''}` : ''),
+        evidencia(e), e.id,
+      ],
       color: reemplazadaPor.has(e.id) ? C.tenue : (e.datos.banderas ?? []).length ? C.alerta : C.texto,
     })),
     { tam: 7.8 },
@@ -349,9 +372,20 @@ export async function generarExpediente(db, empresa, { empleadoId, desde, hasta,
   }
 
   // ---------- 6. NOM-037 ----------
-  if (emp.modalidad === 'home_office') {
-    titulo(6, 'Teletrabajo (NOM-037-STPS-2023)');
-    parrafo('El registro de este trabajador se realiza desde la web o el celular con las acciones Iniciar, Pausa y Terminar. Se guarda la dirección IP y el tipo de dispositivo; no se registra la ubicación exacta del domicilio ni se monitorea la pantalla.');
+  if (muestraLugar) {
+    titulo(6, 'Trabajo a distancia (NOM-037-STPS-2023)');
+    parrafo(emp.modalidad === 'hibrido'
+      ? 'Modalidad híbrida sin días fijos: en el centro de trabajo registra en el kiosco con foto; fuera de él, desde su dispositivo vinculado con Iniciar, Pausa y Terminar, declarando si está en su domicilio o en otro lugar. Se guarda la dirección IP y el tipo de dispositivo; no se registra la ubicación exacta del domicilio ni se monitorea la pantalla.'
+      : 'El registro de este trabajador se realiza desde la web o el celular con las acciones Iniciar, Pausa y Terminar. Se guarda la dirección IP y el tipo de dispositivo; no se registra la ubicación exacta del domicilio ni se monitorea la pantalla.');
+    doc.moveDown(0.4);
+    claveValor([
+      ['Tiempo fuera del centro', `${pctRemoto}% del tiempo laborado en el periodo (${r2(horasRemotas)} de ${r2(totales.total)} h)`],
+      ['Distribución', textoLugar || '-'],
+      ['Días', textoDias || '-'],
+      ['NOM-037', pctRemoto > UMBRAL_NOM037
+        ? `APLICA: supera el ${UMBRAL_NOM037}% de trabajo a distancia (art. 330-A LFT)`
+        : `No aplica en este periodo: no supera el ${UMBRAL_NOM037}% de trabajo a distancia`],
+    ]);
     doc.moveDown(0.4);
     nota('Pendiente en el sistema: padrón de teletrabajadores, inventario de equipo con firma, autoverificación del lugar de trabajo y cuestionario de riesgos psicosociales. Mientras tanto, integrar esa documentación por separado.', C.alerta);
   }

@@ -111,7 +111,7 @@ export async function descargarPlantilla() {
     [titulo('Cómo llenar la plantilla')],
     ['1. Una fila por trabajador, en la hoja "Empleados". Borra las filas de ejemplo.'],
     ['2. Obligatorios: Número, Nombre y Modalidad.'],
-    ['3. Modalidad: Presencial (oficina, planta, tienda), Campo (guardias, choferes, técnicos) o Home office.'],
+    ['3. Modalidad: Presencial (oficina, planta, tienda), Campo (guardias, choferes, técnicos), Home office, o Híbrido (unos días en oficina y otros a distancia, sin días fijos).'],
     ['4. Jornada: Diurna (8 h), Nocturna (7 h) o Mixta (7.5 h). Si la dejas vacía se toma Diurna.'],
     ['5. Teléfono: celular a 10 dígitos. Ahí le llegan por WhatsApp el convenio y su resumen semanal para firmar.'],
     ['6. PIN: 4 dígitos para el kiosco. Déjalo vacío y el sistema genera uno distinto para cada quien.'],

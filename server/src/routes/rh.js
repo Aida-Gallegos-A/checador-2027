@@ -9,8 +9,9 @@ import { enviarConvenio, estadoConvenios, recordarConvenio } from '../convenios.
 import { generarExpediente } from '../expediente.js';
 import {
   armarResumen, empleadosActivos, estadoFirmas, listarCorrecciones, obtenerEmpresa,
-  semanaActual, semanasDeEmpleados, TIPOS_CHECADA,
+  remotoUltimasSemanas, semanaActual, semanasDeEmpleados, TIPOS_CHECADA,
 } from '../servicios.js';
+import { UMBRAL_NOM037 } from '../lib/jornada.js';
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const fmtFecha = (f) => new Date(`${f}T12:00:00Z`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -41,6 +42,7 @@ export function rutasRh(db) {
     const semanas = await semanasDeEmpleados(db, req.empresa, empleados, lunes);
     const firmas = await estadoFirmas(db, req.empresa.id, lunes);
     const pendientes = await listarCorrecciones(db, req.empresa.id, 'pendiente');
+    const remoto = await remotoUltimasSemanas(db, req.empresa, empleados, lunes);
 
     const filas = semanas.map((s) => ({
       empleado: s.empleado,
@@ -50,10 +52,12 @@ export function rutasRh(db) {
       dentro_ahora: s.jornadas.some((j) => j.fecha === hoy && j.incompleta),
       vino_hoy: s.jornadas.some((j) => j.fecha === hoy),
       firma: firmas.get(s.empleado.id) ?? { estado: 'sin_enviar' },
+      remoto: remoto.get(s.empleado.id),
     }));
 
     const alertas = [
       ...filas.flatMap((f) => f.alertas.map((a) => ({ ...a, empleado_id: f.empleado.id }))),
+      ...filas.flatMap((f) => alertasNom037(f.empleado, f.remoto)),
       ...filas.flatMap((f) => f.banderas.map((b) => ({
         nivel: 'media',
         codigo: b.bandera,
@@ -568,10 +572,27 @@ export function rutasRh(db) {
   return r;
 }
 
+/** Avisos de la NOM-037: a quién le aplica (más del 40% remoto) y quién está cerca del umbral. */
+function alertasNom037(emp, r) {
+  if (!r || r.horas_totales === 0) return [];
+  const nombre = emp.nombre;
+  const base = { empleado_id: emp.id };
+  if (r.porcentaje > UMBRAL_NOM037 && emp.modalidad !== 'home_office') {
+    return [{ ...base, nivel: 'alta', codigo: 'nom037_aplica', mensaje: `${nombre} trabajó ${r.porcentaje}% fuera del centro de trabajo en las últimas 4 semanas: le aplica la NOM-037 (teletrabajo)` }];
+  }
+  if (r.porcentaje > UMBRAL_NOM037 - 10 && r.porcentaje <= UMBRAL_NOM037) {
+    return [{ ...base, nivel: 'media', codigo: 'nom037_cerca', mensaje: `${nombre} lleva ${r.porcentaje}% remoto en las últimas 4 semanas; arriba de ${UMBRAL_NOM037}% le aplica la NOM-037` }];
+  }
+  if (emp.modalidad === 'home_office' && r.porcentaje <= UMBRAL_NOM037) {
+    return [{ ...base, nivel: 'media', codigo: 'nom037_no_aplica', mensaje: `${nombre} está como home office pero solo registró ${r.porcentaje}% remoto en 4 semanas; revisa su modalidad` }];
+  }
+  return [];
+}
+
 /** En modo demo la respuesta incluye el código (en producción solo llega por WhatsApp). */
 const conDemo = (obj, codigo) => (process.env.MODO_DEMO === 'true' ? { ...obj, codigo_demo: codigo } : obj);
 
-const MODALIDADES = ['presencial', 'campo', 'home_office'];
+const MODALIDADES = ['presencial', 'campo', 'home_office', 'hibrido'];
 const JORNADAS = ['diurna', 'nocturna', 'mixta'];
 const limpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -626,7 +647,8 @@ const MAPA_MODALIDAD = {
   presencial: 'presencial', oficina: 'presencial', planta: 'presencial', tienda: 'presencial', sucursal: 'presencial',
   campo: 'campo', ruta: 'campo', foraneo: 'campo', guardia: 'campo', chofer: 'campo', tecnico: 'campo',
   'home office': 'home_office', home_office: 'home_office', homeoffice: 'home_office', remoto: 'home_office',
-  teletrabajo: 'home_office', 'en casa': 'home_office', casa: 'home_office', hibrido: 'home_office',
+  teletrabajo: 'home_office', 'en casa': 'home_office', casa: 'home_office',
+  hibrido: 'hibrido', hibrida: 'hibrido', mixto: 'hibrido', mixta: 'hibrido', 'home office parcial': 'hibrido',
 };
 const MAPA_JORNADA = { diurna: 'diurna', dia: 'diurna', nocturna: 'nocturna', noche: 'nocturna', mixta: 'mixta' };
 
@@ -641,7 +663,7 @@ export function normalizarFila(f, errores) {
   let modalidad = null;
   if (texto(f.modalidad)) {
     modalidad = MAPA_MODALIDAD[sinAcentos(f.modalidad)] ?? null;
-    if (!modalidad) errores.push(`Modalidad "${texto(f.modalidad)}" no reconocida (usa presencial, campo o home office)`);
+    if (!modalidad) errores.push(`Modalidad "${texto(f.modalidad)}" no reconocida (usa presencial, campo, home office o híbrido)`);
   } else {
     errores.push('Falta la modalidad');
   }

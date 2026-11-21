@@ -92,6 +92,7 @@ export function rutasKiosco(db) {
         datos: {
           tipo,
           origen: 'kiosco',
+          lugar: 'oficina',
           centro_id: req.centro.id,
           hora_dispositivo: dispositivo && !Number.isNaN(+dispositivo) ? dispositivo.toISOString() : null,
           evidencia,

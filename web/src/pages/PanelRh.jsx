@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Empleados from './Empleados.jsx';
 import Empresa from './Empresa.jsx';
 import Expediente from './Expediente.jsx';
-import { ErrorApi, fechaCorta, fechaHora, h, hora, MODALIDADES, rh, sumarDias, TIPOS, tokens } from '../api.js';
+import { ErrorApi, LUGARES, fechaCorta, fechaHora, h, hora, MODALIDADES, rh, sumarDias, TIPOS, tokens } from '../api.js';
 
 const SECCIONES = { resumen: 'Resumen', empleados: 'Empleados', correcciones: 'Correcciones', firmas: 'Firmas semanales', integridad: 'Expediente y nómina', empresa: 'Empresa' };
 const ESTADO_FIRMA = { firmada: 'Firmada', pendiente: 'Pendiente', objetada: 'Objetada', sin_enviar: 'Sin enviar' };
@@ -120,7 +120,7 @@ function Resumen({ datos, semana, onCambio, onAviso }) {
         <div className="tabla-scroll">
           <table>
             <thead>
-              <tr><th>Trabajador</th><th>Modalidad</th><th>Semana</th><th>Ordinarias</th><th>Extra dobles</th><th>Extra triples</th><th>Firma</th></tr>
+              <tr><th>Trabajador</th><th>Modalidad</th><th>Semana</th><th>Ordinarias</th><th>Extra dobles</th><th>Extra triples</th><th>A distancia (4 sem.)</th><th>Firma</th></tr>
             </thead>
             <tbody>
               {datos.empleados.map((f) => (
@@ -131,6 +131,7 @@ function Resumen({ datos, semana, onCambio, onAviso }) {
                   <td>{h(f.semana.ordinarias)}</td>
                   <td>{h(f.semana.extraDobles)}</td>
                   <td className={f.semana.extraTriples > 0 ? 'texto-critico' : ''}>{h(f.semana.extraTriples)}</td>
+                  <td><Remoto r={f.remoto} /></td>
                   <td><Estado estado={f.firma.estado} /></td>
                 </tr>
               ))}
@@ -166,6 +167,27 @@ function Barra({ total, tope }) {
       <span>{h(total)} / {tope}</span>
     </div>
   );
+}
+
+/** Porcentaje de trabajo a distancia en 4 semanas, con aviso de NOM-037 (más del 40%). */
+function Remoto({ r }) {
+  if (!r) return <span className="tenue">—</span>;
+  return (
+    <span title={Object.entries(r.horas_por_lugar).map(([k, v]) => `${LUGARES[k] ?? k}: ${v} h`).join(' · ')}>
+      <strong>{r.porcentaje}%</strong>
+      {r.aplica_nom037 && <span className="estado estado-nom"> NOM-037</span>}
+      <br /><small className="tenue">{diasTexto(r.dias)}</small>
+    </span>
+  );
+}
+
+const DIAS = { oficina: 'oficina', remoto: 'remoto', mixto: 'mixto', campo: 'campo' };
+const diasTexto = (dias) => Object.entries(dias ?? {}).filter(([k]) => DIAS[k]).map(([k, v]) => `${v} ${DIAS[k]}`).join(' · ');
+
+function lugaresDia(p = {}) {
+  const partes = Object.entries(p).filter(([, v]) => v > 0);
+  if (partes.length === 0) return '—';
+  return partes.map(([k, v]) => (partes.length > 1 ? `${LUGARES[k] ?? k} ${h(v / 60)}` : LUGARES[k] ?? k)).join(' + ');
 }
 
 const Estado = ({ estado }) => <span className={`estado estado-${estado}`}>{ESTADO_FIRMA[estado] ?? estado}</span>;
@@ -214,7 +236,7 @@ function DetalleEmpleado({ empleado, semana, onCerrar, onCorreccion }) {
           <>
             <h3>Jornadas</h3>
             <table>
-              <thead><tr><th>Día</th><th>Entrada</th><th>Salida</th><th>Trabajado</th><th>Incidencias</th></tr></thead>
+              <thead><tr><th>Día</th><th>Entrada</th><th>Salida</th><th>Trabajado</th><th>Lugar</th><th>Incidencias</th></tr></thead>
               <tbody>
                 {d.jornadas.map((j, i) => (
                   <tr key={i}>
@@ -222,10 +244,11 @@ function DetalleEmpleado({ empleado, semana, onCerrar, onCorreccion }) {
                     <td>{hora(j.entrada)}</td>
                     <td>{j.salida ? hora(j.salida) : <span className="texto-critico">Sin salida</span>}</td>
                     <td>{h(j.minutosTrabajados / 60)}</td>
+                    <td>{lugaresDia(j.minutosPorLugar)}</td>
                     <td className="tenue">{j.incidencias.join(', ').replaceAll('_', ' ')}</td>
                   </tr>
                 ))}
-                {d.jornadas.length === 0 && <tr><td colSpan={5} className="tenue">Sin jornadas esta semana.</td></tr>}
+                {d.jornadas.length === 0 && <tr><td colSpan={6} className="tenue">Sin jornadas esta semana.</td></tr>}
               </tbody>
             </table>
 
@@ -234,7 +257,7 @@ function DetalleEmpleado({ empleado, semana, onCerrar, onCorreccion }) {
               {checadas.map((e) => (
                 <li key={e.id} className={reemplazadas.has(e.id) ? 'reemplazado' : ''}>
                   <span>{fechaHora(e.hora)}</span>
-                  <span>{TIPOS[e.datos.tipo]}</span>
+                  <span>{TIPOS[e.datos.tipo]}{e.datos.lugar && e.datos.lugar !== 'oficina' ? ` · ${LUGARES[e.datos.lugar]}` : ''}</span>
                   <span className="tenue">
                     {e.clase === 'correccion_aprobada' ? `Corrección aprobada por ${e.datos.decidido_por}` : e.datos.origen}
                     {e.datos.evidencia?.foto_sha256 && ' · con foto'}

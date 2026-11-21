@@ -256,6 +256,58 @@ test('expediente PDF: se genera, trae su huella y queda constancia en la bitáco
   assert.equal((await api('GET', `/rh/expediente.pdf?empleado_id=999&desde=2026-01-01&hasta=${hoy}`, RH)).status, 404);
 });
 
+test('Mi checador (híbrido): vincular dispositivo por WhatsApp y registrar desde casa', async () => {
+  const JSONH = { 'content-type': 'application/json' };
+  const alta = await api('POST', '/rh/empleados', RH, { numero: '30', nombre: 'Luis Navarro', modalidad: 'hibrido', telefono: '55 3333 4444', enviar_convenio: false });
+  assert.equal(alta.status, 201);
+  assert.equal(alta.body.modalidad, 'hibrido');
+
+  // Número no registrado: misma respuesta, sin código (no revela quién trabaja ahí).
+  const nadie = await api('POST', '/yo/activar/solicitar', JSONH, { telefono: '5599999999' });
+  assert.equal(nadie.status, 200);
+  assert.equal(nadie.body.codigo_demo, undefined);
+
+  const sol = await api('POST', '/yo/activar/solicitar', JSONH, { telefono: '5533334444' });
+  assert.match(sol.body.codigo_demo, /^\d{6}$/);
+  const malo = await api('POST', '/yo/activar/confirmar', JSONH, { telefono: '5533334444', codigo: sol.body.codigo_demo === '000000' ? '111111' : '000000' });
+  assert.equal(malo.status, 403);
+  const ok = await api('POST', '/yo/activar/confirmar', JSONH, { telefono: '5533334444', codigo: sol.body.codigo_demo });
+  assert.equal(ok.status, 201);
+  assert.equal((await api('POST', '/yo/activar/confirmar', JSONH, { telefono: '5533334444', codigo: sol.body.codigo_demo })).status, 403, 'el código es de un solo uso');
+
+  const YO = { 'x-dispositivo-token': ok.body.token, 'content-type': 'application/json' };
+  assert.equal((await api('GET', '/yo', JSONH)).status, 401);
+  let yo = await api('GET', '/yo', YO);
+  assert.equal(yo.body.empleado.nombre, 'Luis Navarro');
+  assert.equal(yo.body.puede_remoto, true);
+  assert.equal(yo.body.estado, 'fuera');
+
+  assert.equal((await api('POST', '/yo/checar', YO, { tipo: 'entrada' })).status, 400, 'al iniciar debe decir dónde está');
+  const entrada = await api('POST', '/yo/checar', YO, { tipo: 'entrada', lugar: 'casa', hora_dispositivo: new Date().toISOString() });
+  assert.equal(entrada.status, 201);
+  assert.equal(entrada.body.lugar, 'casa');
+  yo = await api('GET', '/yo', YO);
+  assert.equal(yo.body.estado, 'trabajando');
+  assert.equal(yo.body.lugar_actual, 'casa');
+  assert.deepEqual(yo.body.permitidos, ['salida_comida', 'salida']);
+
+  // Termina el día en la oficina, en el kiosco: el mismo día queda mixto.
+  await api('POST', '/rh/empleados/' + alta.body.id + '/pin', RH, { pin: '2468' });
+  const k = await api('POST', '/kiosco/checar', KIOSCO, { pin: '2468', tipo: 'salida', foto: FOTO });
+  assert.deepEqual(k.body.banderas, []);
+  const { rows } = await db.query(`SELECT datos->>'lugar' AS lugar, datos->'evidencia'->>'ip' AS ip FROM bitacora WHERE empleado_id = $1 AND clase = 'checada' ORDER BY id`, [alta.body.id]);
+  assert.deepEqual(rows.map((r) => r.lugar), ['casa', 'oficina']);
+  assert.ok(rows[0].ip, 'desde casa se guarda la IP');
+
+  // Un empleado presencial no puede registrar remoto.
+  await api('PATCH', `/rh/empleados/${alta.body.id}`, RH, { modalidad: 'presencial' });
+  assert.equal((await api('POST', '/yo/checar', YO, { tipo: 'entrada', lugar: 'casa' })).status, 403);
+
+  // Desvincular: el token deja de servir.
+  assert.equal((await api('POST', '/yo/salir', YO)).status, 200);
+  assert.equal((await api('GET', '/yo', YO)).status, 401);
+});
+
 test('la cadena está íntegra y detecta una alteración directa en la base', async () => {
   const v = await api('GET', '/rh/cadena/verificar', RH);
   assert.equal(v.body.integra, true);

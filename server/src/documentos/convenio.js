@@ -17,15 +17,23 @@ const EVIDENCIA = {
   home_office:
     'desde la página web o la aplicación, con las acciones "Iniciar", "Pausa" y "Terminar". Se guarda la dirección IP y el tipo de '
     + 'dispositivo. NO se registra la ubicación exacta del domicilio, ni se monitorea la pantalla, el teclado o la cámara',
+  hibrido:
+    'de la siguiente forma, según dónde labore cada día, sin que existan días fijos para cada esquema: (a) cuando labore en el centro '
+    + 'de trabajo, en la tablet (kiosco) con su PIN personal, que toma automáticamente una fotografía del rostro sin identificar a la persona '
+    + 'ni generar datos biométricos; (b) cuando labore fuera del centro de trabajo, desde "Mi checador" en su celular o computadora vinculados, '
+    + 'con las acciones "Iniciar", "Pausa" y "Terminar", indicando si trabaja desde su domicilio o desde otro lugar. En este caso se guarda la '
+    + 'dirección IP y el tipo de dispositivo; NO se registra la ubicación exacta del domicilio ni se monitorea la pantalla, el teclado o la cámara. '
+    + 'Un mismo día puede iniciarse en un lugar y terminarse en otro',
 };
 
 const DATOS_POR_MODALIDAD = {
   presencial: 'fotografía del rostro tomada al momento de registrar',
   campo: 'fotografía (selfie) y ubicación GPS tomadas solo al momento de registrar; identificador del teléfono vinculado',
   home_office: 'dirección IP y tipo de dispositivo al momento de registrar (sin ubicación exacta del domicilio)',
+  hibrido: 'fotografía del rostro al registrar en el centro de trabajo; al registrar fuera de él, dirección IP, tipo de dispositivo y el lugar declarado (domicilio u otro), sin ubicación exacta',
 };
 
-const MODALIDAD_TEXTO = { presencial: 'presencial', campo: 'de campo', home_office: 'teletrabajo (home office)' };
+const MODALIDAD_TEXTO = { presencial: 'presencial', campo: 'de campo', home_office: 'teletrabajo (home office)', hibrido: 'híbrida (parte en el centro de trabajo y parte a distancia)' };
 
 export function documentosPara(empresa, empleado) {
   const patron = empresa.nombre;
@@ -44,6 +52,7 @@ export function documentosPara(empresa, empleado) {
     `CUARTA. Inalterabilidad. Los registros no se borran ni se editan. Si EL TRABAJADOR olvida registrar o considera que un registro es incorrecto, podrá solicitar una corrección indicando el motivo; la corrección se agrega al historial con quién la pidió, quién la autorizó y cuándo, y el registro original se conserva.`,
     `QUINTA. Confirmación semanal. Cada semana EL TRABAJADOR recibirá por WhatsApp o SMS el resumen de sus horas ordinarias y extraordinarias. Podrá confirmarlo con el código que reciba o manifestar su inconformidad; en este último caso LA EMPRESA revisará el registro y le enviará un resumen corregido. La confirmación no impide a EL TRABAJADOR ejercer los derechos que la ley le otorga.`,
     `SEXTA. Tiempo extraordinario. El tiempo extraordinario solo se laborará cuando LA EMPRESA lo autorice, se registrará en el sistema y se pagará conforme a la Ley Federal del Trabajo. Si EL TRABAJADOR continúa laborando después de cumplir su jornada, el sistema lo registrará como tiempo extraordinario.`,
+    ...(mod === 'hibrido' ? [`SEXTA BIS. Proporción de trabajo a distancia. El sistema calcula qué parte de la jornada se labora fuera del centro de trabajo. Si en un periodo supera el cuarenta por ciento, LA EMPRESA aplicará al TRABAJADOR las obligaciones de teletrabajo de los artículos 330-A a 330-K de la Ley Federal del Trabajo y de la NOM-037-STPS-2023, y se lo notificará.`] : []),
     `SÉPTIMA. Acceso. EL TRABAJADOR podrá consultar en cualquier momento su historial de registros y solicitar una copia.`,
     `OCTAVA. Conservación. Los registros se conservarán durante la relación de trabajo y, al menos, un año después de su terminación, y se pondrán a disposición de la autoridad laboral cuando lo requiera.`,
     `NOVENA. Firma electrónica. EL TRABAJADOR firma este convenio ingresando el código que recibió en su teléfono ${empleado.telefono ?? ''}. Las partes reconocen esta firma como manifestación expresa de su voluntad.`,
@@ -66,7 +75,7 @@ export function documentosPara(empresa, empleado) {
     `1. Jornada. La jornada de EL TRABAJADOR es ${empleado.tipo_jornada ?? 'diurna'}, con el horario pactado en su contrato, y respeta el máximo semanal vigente cada año conforme a la reforma a la Ley Federal del Trabajo (46 horas en 2027, 44 en 2028, 42 en 2029 y 40 en 2030), sin reducción de salario.`,
     `2. Registro completo. Debe registrarse todo el tiempo laborado, incluido el que se trabaje fuera del horario a solicitud de un superior.`,
     `3. Tiempo extra autorizado. Ningún superior puede pedir trabajo fuera de la jornada sin registrarlo como tiempo extraordinario. El sistema avisa al supervisor antes de rebasar los límites legales.`,
-    `4. Desconexión. Al terminar su jornada, EL TRABAJADOR no está obligado a responder llamadas, mensajes o correos de trabajo, salvo emergencias o tiempo extraordinario autorizado y registrado.${mod === 'home_office' ? ' Esta política forma parte de las obligaciones de la NOM-037-STPS-2023 sobre teletrabajo.' : ''}`,
+    `4. Desconexión. Al terminar su jornada, EL TRABAJADOR no está obligado a responder llamadas, mensajes o correos de trabajo, salvo emergencias o tiempo extraordinario autorizado y registrado.${mod === 'home_office' || mod === 'hibrido' ? ' Esta política forma parte de las obligaciones de la NOM-037-STPS-2023 sobre teletrabajo.' : ''}`,
     `5. Inconformidades. Si EL TRABAJADOR considera que su resumen semanal no refleja lo que trabajó, debe indicarlo al responder el resumen. Ninguna inconformidad dará lugar a represalias.`,
   ].join('\n\n');
 

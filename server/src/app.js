@@ -3,6 +3,7 @@ import { rutasKiosco } from './routes/kiosco.js';
 import { rutasRh } from './routes/rh.js';
 import { rutasFirmas } from './routes/firmas.js';
 import { rutasConvenios } from './routes/convenios.js';
+import { rutasYo } from './routes/yo.js';
 
 export function crearApp(db) {
   const app = express();
@@ -15,6 +16,7 @@ export function crearApp(db) {
   app.use('/api/rh', rutasRh(db));
   app.use('/api/firmas', rutasFirmas(db));
   app.use('/api/convenios', rutasConvenios(db));
+  app.use('/api/yo', rutasYo(db));
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 

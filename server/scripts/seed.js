@@ -44,6 +44,7 @@ const personas = [
   { numero: '002', nombre: 'Ana López', puesto: 'Recepcionista', modalidad: 'presencial', pin: '5678', telefono: '+525500000002' },
   { numero: '003', nombre: 'Pedro Ramírez', puesto: 'Guardia (12x12)', modalidad: 'campo', pin: '4321', telefono: '+525500000003' },
   { numero: '004', nombre: 'María Torres', puesto: 'Analista', modalidad: 'home_office', pin: '8765', telefono: '+525500000004' },
+  { numero: '005', nombre: 'Luis Navarro', puesto: 'Contador', modalidad: 'hibrido', pin: '2468', telefono: '+525500000005' },
 ];
 const emp = {};
 for (const p of personas) {
@@ -82,7 +83,7 @@ const ids = {};
 async function checar(pin, fecha, tipo, hhmm, extra = {}) {
   const ev = await db.transaction((tx) => agregarEvento(tx, {
     empresa_id: E, empleado_id: emp[pin], clase: 'checada', hora: en(fecha, hhmm),
-    datos: { tipo, origen: extra.origen ?? 'demo', evidencia: extra.evidencia ?? {}, banderas: extra.banderas ?? [] },
+    datos: { tipo, origen: extra.origen ?? 'demo', ...(extra.lugar ? { lugar: extra.lugar } : {}), evidencia: extra.evidencia ?? {}, banderas: extra.banderas ?? [] },
   }));
   ids[`${pin}:${fecha}:${tipo}`] = ev.id;
   return ev;
@@ -136,6 +137,27 @@ for (const fecha of dias) {
     await checar('8765', fecha, 'regreso_comida', '14:45', { origen: 'web', evidencia });
     await checar('8765', fecha, 'salida', '17:45', { origen: 'web', evidencia });
   }
+
+  // Luis: híbrido sin días fijos. Semana pasada: lun y jue en oficina, mar/mié/vie en casa (60% remoto).
+  // Esta semana: lunes en casa, martes en oficina, miércoles mixto (mañana en casa, tarde en oficina).
+  if (dow >= 1 && dow <= 5) {
+    const web = (lugar) => ({ origen: 'web', lugar, evidencia: { ip: '189.203.11.40', dispositivo: 'Android · Chrome' } });
+    const kiosco = { origen: 'kiosco', lugar: 'oficina' };
+    const enOficina = semanaPasada ? [1, 4].includes(dow) : dow === 2;
+    const mixto = !semanaPasada && dow === 3;
+    if (mixto) {
+      await checar('2468', fecha, 'entrada', '08:30', web('casa'));
+      await checar('2468', fecha, 'salida_comida', '12:30', web('casa'));
+      await checar('2468', fecha, 'regreso_comida', '14:00', kiosco);
+      await checar('2468', fecha, 'salida', '18:00', kiosco);
+    } else {
+      const m = enOficina ? kiosco : web('casa');
+      await checar('2468', fecha, 'entrada', '09:00', m);
+      await checar('2468', fecha, 'salida_comida', '14:00', m);
+      await checar('2468', fecha, 'regreso_comida', '15:00', m);
+      await checar('2468', fecha, 'salida', '18:00', m);
+    }
+  }
 }
 
 // Corrección pendiente: Ana pide registrar la salida que olvidó el miércoles.
@@ -168,6 +190,11 @@ const rJuan = await enviarResumen('1234');
 await enviarResumen('5678');
 const rPedro = await enviarResumen('4321');
 const rMaria = await enviarResumen('8765');
+const rLuis = await enviarResumen('2468');
+await db.transaction((tx) => agregarEvento(tx, {
+  empresa_id: E, empleado_id: emp['2468'], clase: 'firma',
+  datos: { resumen_id: rLuis.id, semana: lunesPasado, hash_resumen: rLuis.datos.hash_resumen, metodo: 'codigo_whatsapp', demo: true },
+}));
 
 await db.transaction((tx) => agregarEvento(tx, {
   empresa_id: E, empleado_id: emp['1234'], clase: 'firma',
@@ -183,7 +210,8 @@ await db.transaction((tx) => agregarEvento(tx, {
 }));
 
 const { rows: [{ total }] } = await db.query(`SELECT count(*)::int AS total FROM bitacora`);
-console.log(`Listo: empresa demo, 4 empleados, ${total} eventos en la bitácora.`);
-console.log(`Kiosco: token "${TOKEN_KIOSCO}" · PINs 1234 Juan, 5678 Ana, 4321 Pedro, 8765 María`);
+console.log(`Listo: empresa demo, ${personas.length} empleados, ${total} eventos en la bitácora.`);
+console.log(`Kiosco: token "${TOKEN_KIOSCO}" · PINs 1234 Juan, 5678 Ana, 4321 Pedro, 8765 María, 2468 Luis (híbrido)`);
+console.log(`Mi checador (#/mi): celular de Luis 55 0000 0005`);
 console.log(`Panel de RH: token "${process.env.RH_TOKEN ?? 'rh-demo'}"`);
 await db.close();

@@ -80,6 +80,34 @@ ALTER TABLE empresas ADD COLUMN IF NOT EXISTS rfc text;
 ALTER TABLE empresas ADD COLUMN IF NOT EXISTS domicilio text;
 ALTER TABLE empresas ADD COLUMN IF NOT EXISTS correo_privacidad text;
 
+-- Migración: modalidad híbrida (unos días en oficina y otros remoto, sin días fijos).
+ALTER TABLE empleados DROP CONSTRAINT IF EXISTS empleados_modalidad_check;
+ALTER TABLE empleados ADD CONSTRAINT empleados_modalidad_check CHECK (modalidad IN ('presencial', 'campo', 'home_office', 'hibrido'));
+
+-- Dispositivos vinculados del trabajador ("Mi checador" en su celular o computadora).
+-- Se vincula con un código por WhatsApp; el token solo se guarda como hash.
+CREATE TABLE IF NOT EXISTS dispositivos (
+  id           serial PRIMARY KEY,
+  empresa_id   int NOT NULL REFERENCES empresas(id),
+  empleado_id  int NOT NULL REFERENCES empleados(id),
+  token_hash   text NOT NULL UNIQUE,
+  descripcion  text,
+  creado_en    timestamptz NOT NULL DEFAULT now(),
+  ultimo_uso   timestamptz,
+  revocado_en  timestamptz
+);
+
+-- Códigos de activación pendientes (vida corta).
+CREATE TABLE IF NOT EXISTS activaciones (
+  id           serial PRIMARY KEY,
+  empleado_id  int NOT NULL REFERENCES empleados(id),
+  codigo_sal   text NOT NULL,
+  codigo_hash  text NOT NULL,
+  expira       timestamptz NOT NULL,
+  intentos     int NOT NULL DEFAULT 0,
+  usado_en     timestamptz
+);
+
 CREATE INDEX IF NOT EXISTS bitacora_empleado_hora ON bitacora (empresa_id, empleado_id, clase, hora);
 CREATE INDEX IF NOT EXISTS bitacora_empresa_id ON bitacora (empresa_id, id);
 

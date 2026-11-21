@@ -7,6 +7,8 @@ export const tokens = {
   kiosco: () => leer('checador.kiosco', import.meta.env.VITE_KIOSCO_TOKEN ?? 'kiosco-demo'),
   rh: () => leer('checador.rh', ''),
   setRh: (t) => guardar('checador.rh', t),
+  dispositivo: () => leer('checador.dispositivo', ''),
+  setDispositivo: (t) => { if (t) guardar('checador.dispositivo', t); else { try { localStorage.removeItem('checador.dispositivo'); } catch { /* nada */ } } },
 };
 
 export class ErrorApi extends Error {
@@ -65,6 +67,15 @@ export const rh = {
   nomina: (semana) => pedir('GET', `/rh/nomina.csv?semana=${semana}`, { headers: rhHeaders() }),
 };
 
+const yoHeaders = () => ({ 'x-dispositivo-token': tokens.dispositivo() });
+export const yo = {
+  solicitar: (telefono) => pedir('POST', '/yo/activar/solicitar', { body: { telefono } }),
+  confirmar: (telefono, codigo) => pedir('POST', '/yo/activar/confirmar', { body: { telefono, codigo } }),
+  estado: () => pedir('GET', '/yo', { headers: yoHeaders() }),
+  checar: (tipo, lugar) => pedir('POST', '/yo/checar', { body: { tipo, lugar, hora_dispositivo: new Date().toISOString() }, headers: yoHeaders() }),
+  salir: () => pedir('POST', '/yo/salir', { headers: yoHeaders() }),
+};
+
 export const convenios = {
   ver: (id, codigo) => pedir('POST', `/convenios/${id}/ver`, { body: { codigo } }),
   firmar: (id, codigo) => pedir('POST', `/convenios/${id}/firmar`, { body: { codigo, acepto: true } }),
@@ -91,4 +102,5 @@ export const TIPOS = {
   regreso_comida: 'Regreso de comer',
   salida: 'Salida',
 };
-export const MODALIDADES = { presencial: 'Presencial', campo: 'Campo', home_office: 'Home office' };
+export const MODALIDADES = { presencial: 'Presencial', campo: 'Campo', home_office: 'Home office', hibrido: 'Híbrido' };
+export const LUGARES = { oficina: 'Oficina', casa: 'Casa', otro: 'Otro lugar', campo: 'Campo', sin_dato: 'Sin dato' };

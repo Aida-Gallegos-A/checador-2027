@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  calcularJornadas, calcularSemana, checadasEfectivas, inicioDelDiaLocal, lunesDe, reglaDelAnio, alertasSemana,
+  calcularJornadas, calcularSemana, checadasEfectivas, inicioDelDiaLocal, lugarDe, lunesDe, reglaDelAnio, alertasSemana,
 } from '../src/lib/jornada.js';
 
 const Z = 'America/Mexico_City';
@@ -93,6 +93,30 @@ test('jornada nocturna: 7 h diarias ordinarias', () => {
   const s = calcularSemana([{ minutosTrabajados: 480, incompleta: false }], { anio: 2027, tipoJornada: 'nocturna' });
   assert.equal(s.ordinarias, 7);
   assert.equal(s.extraDobles, 1);
+});
+
+test('híbrido: día mixto (mañana en casa, tarde en oficina) reparte las horas por lugar', () => {
+  const lugar = (l) => (c) => ({ ...c, lugar: l });
+  const { jornadas } = calcularJornadas([
+    lugar('casa')(ch('2027-01-04', 'entrada', '08:30')),
+    lugar('casa')(ch('2027-01-04', 'salida_comida', '12:30')),
+    lugar('oficina')(ch('2027-01-04', 'regreso_comida', '14:00')),
+    lugar('oficina')(ch('2027-01-04', 'salida', '18:00')),
+  ], Z);
+  assert.deepEqual(jornadas[0].minutosPorLugar, { casa: 240, oficina: 240 });
+  const s = calcularSemana(jornadas, { anio: 2027 });
+  assert.equal(s.porcentajeRemoto, 50);
+  assert.deepEqual(s.diasPorLugar, { mixto: 1 });
+});
+
+test('híbrido: 3 días en casa y 2 en oficina = 60% remoto (supera el 40% de la NOM-037)', () => {
+  const dia = (l) => ({ minutosTrabajados: 480, minutosPorLugar: { [l]: 480 }, incompleta: false });
+  const s = calcularSemana([dia('oficina'), dia('casa'), dia('casa'), dia('oficina'), dia('casa')], { anio: 2027 });
+  assert.equal(s.porcentajeRemoto, 60);
+  assert.deepEqual(s.diasPorLugar, { oficina: 2, remoto: 3 });
+  assert.equal(lugarDe({ datos: { origen: 'kiosco' } }), 'oficina');
+  assert.equal(lugarDe({ datos: { origen: 'web' } }), 'casa');
+  assert.equal(lugarDe({ datos: { origen: 'app' } }), 'campo', 'el trabajo de campo no es teletrabajo');
 });
 
 test('una corrección aprobada reemplaza al original sin borrarlo', () => {

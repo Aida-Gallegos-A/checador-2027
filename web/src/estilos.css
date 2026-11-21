@@ -267,6 +267,37 @@ td { font-variant-numeric: tabular-nums; }
   background: var(--acento-suave); border-radius: 8px; padding: 0.7rem 1rem; margin: 0.5rem 0 1rem;
 }
 .tarjeta-form { max-width: 640px; }
+.estado-nom { background: #ede9fe; color: #6d28d9; margin-left: 0.3rem; }
+@media (prefers-color-scheme: dark) { .estado-nom { background: #2e1f5e; color: #c4b5fd; } }
+
+/* Mi checador (trabajador) */
+.mi { max-width: 480px; padding-top: 4vh; }
+.mi-cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.mi-cabeza h1 { margin: 0; }
+.mi-reloj { font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--marca); }
+@media (prefers-color-scheme: dark) { .mi-reloj { color: var(--acento); } }
+.mi-estado { display: grid; gap: 0.45rem; border-left: 5px solid var(--borde); }
+.mi-estado > strong { font-size: 1.3rem; }
+.mi-trabajando { border-left-color: var(--acento); }
+.mi-en_pausa { border-left-color: var(--alerta); }
+.mi-barra { height: 10px; margin-top: 0.3rem; }
+.mi-acciones { display: grid; gap: 0.75rem; margin: 1rem 0; }
+.boton-grande { padding: 1rem; font-size: 1.1rem; border-radius: 14px; }
+.boton-terminar { background: #a3471d; border-color: #a3471d; }
+.mi-lugar { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.mi-lugar legend { font-weight: 700; margin-bottom: 0.5rem; }
+.mi-lugar label {
+  display: flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.9rem; cursor: pointer;
+  border: 2px solid var(--borde); border-radius: 12px; background: var(--superficie); font-weight: 600;
+}
+.mi-lugar label.activo { border-color: var(--acento); background: var(--acento-suave); color: var(--acento); }
+.mi-lugar input { width: auto; accent-color: var(--acento); }
+.mi-lugar small { grid-column: 1 / -1; }
+.mi-semana { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.75rem; }
+.mi-semana > div { display: grid; gap: 0.1rem; }
+.mi-semana strong { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.mi-semana small { color: var(--tenue); }
+.mi-pie { display: grid; gap: 0.3rem; justify-items: start; margin-top: 1.5rem; font-size: 0.85rem; }
 
 @media (max-width: 640px) {
   .dos-columnas { grid-template-columns: 1fr; }
