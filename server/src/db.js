@@ -3,6 +3,7 @@ import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { rutaDatos } from './lib/rutas.js';
 
 const SCHEMA = fileURLToPath(new URL('./schema.sql', import.meta.url));
 
@@ -17,7 +18,7 @@ const SCHEMA = fileURLToPath(new URL('./schema.sql', import.meta.url));
 
 /** @returns {Promise<Db>} */
 export async function crearDb({ url = process.env.DATABASE_URL, dir = process.env.PGLITE_DIR } = {}) {
-  const db = url ? await conPostgres(url) : await conPglite(dir ?? './data/pglite');
+  const db = url ? await conPostgres(url) : await conPglite(dir === 'memory' ? 'memory' : rutaDatos(dir, './data/pglite'));
   await db.exec(await readFile(SCHEMA, 'utf8'));
   return db;
 }
@@ -80,7 +81,7 @@ async function conPglite(dir) {
   if (dir === 'memory') {
     pg = new PGlite();
   } else {
-    const ruta = path.resolve(dir);
+    const ruta = dir;
     await mkdir(ruta, { recursive: true });
     await tomarBloqueo(ruta);
     pg = new PGlite(ruta);

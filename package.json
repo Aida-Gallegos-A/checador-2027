@@ -2,15 +2,20 @@
   "name": "checador-2027",
   "private": true,
   "description": "Checador de jornada con evidencia legal (reforma LFT 2027)",
+  "type": "module",
   "workspaces": [
     "server",
     "web"
   ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "concurrently -n api,web -c green,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "node server/src/index.js",
     "seed": "npm run seed -w server",
-    "test": "npm test -w server",
-    "build": "npm run build -w web"
+    "test": "npm test -w server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

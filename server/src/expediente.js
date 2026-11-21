@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import PDFDocument from 'pdfkit';
+import { dirAlmacen } from './lib/rutas.js';
 import { agregarEvento, verificarCadena } from './lib/cadena.js';
 import { inicioDelDiaLocal, LUGARES_REMOTOS, lugarDe, lunesDe, sumarDias, UMBRAL_NOM037 } from './lib/jornada.js';
 import { estadoFirmas, listarCorrecciones, semanasDeEmpleados } from './servicios.js';
@@ -97,7 +98,7 @@ export async function generarExpediente(db, empresa, { empleadoId, desde, hasta,
       && ((new Date(c.hora_propuesta) >= ini && new Date(c.hora_propuesta) < fin) || (new Date(c.solicitada_en) >= ini && new Date(c.solicitada_en) < fin)))
     .reverse();
 
-  const dirFotos = path.resolve(process.env.STORAGE_DIR ?? './storage', 'fotos');
+  const dirFotos = path.join(dirAlmacen(), 'fotos');
   const fotos = checadas
     .filter((e) => e.datos.evidencia?.foto_archivo)
     .map((e) => {

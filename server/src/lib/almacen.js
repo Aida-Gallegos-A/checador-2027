@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { dirAlmacen } from './rutas.js';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -16,7 +17,7 @@ export async function guardarFoto(dataUrl) {
   if (bytes.length === 0 || bytes.length > MAX_BYTES) return null;
 
   const huella = createHash('sha256').update(bytes).digest('hex');
-  const dir = path.resolve(process.env.STORAGE_DIR ?? './storage', 'fotos');
+  const dir = path.join(dirAlmacen(), 'fotos');
   await mkdir(dir, { recursive: true });
   const archivo = `${huella}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`;
   await writeFile(path.join(dir, archivo), bytes);
