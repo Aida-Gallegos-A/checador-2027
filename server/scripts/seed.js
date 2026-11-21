@@ -7,6 +7,7 @@ import { agregarEvento, jsonCanonico, sha256 } from '../src/lib/cadena.js';
 import { fechaLocal, inicioDelDiaLocal, lunesDe, sumarDias } from '../src/lib/jornada.js';
 import { generarSal, hashCodigo, hashToken, indicePin } from '../src/lib/seguridad.js';
 import { armarResumen, empleadosActivos, obtenerEmpresa, semanasDeEmpleados } from '../src/servicios.js';
+import { enviarConvenio } from '../src/convenios.js';
 
 const ZONA = 'America/Mexico_City';
 const TOKEN_KIOSCO = 'kiosco-demo';
@@ -26,7 +27,10 @@ if (existe) {
 }
 
 const { rows: [empresa] } = await db.query(
-  `INSERT INTO empresas (nombre, zona_horaria) VALUES ('Seguridad y Logística Demo, S.A. de C.V.', $1) RETURNING id`,
+  `INSERT INTO empresas (nombre, zona_horaria, rfc, domicilio, correo_privacidad)
+   VALUES ('Seguridad y Logística Demo, S.A. de C.V.', $1, 'SLD200101AB1',
+           'Av. Insurgentes Sur 1000, Col. Del Valle, Benito Juárez, 03100, Ciudad de México', 'privacidad@demo.mx')
+   RETURNING *`,
   [ZONA],
 );
 const E = empresa.id;
@@ -51,8 +55,21 @@ for (const p of personas) {
   emp[p.pin] = r.id;
   await db.transaction((tx) => agregarEvento(tx, {
     empresa_id: E, empleado_id: r.id, clase: 'nota',
-    datos: { asunto: 'convenio_registro_electronico_firmado', documentos: ['convenio', 'aviso_privacidad', 'politica_jornada'], metodo: 'codigo_whatsapp', demo: true },
+    datos: { asunto: 'alta_empleado', numero: p.numero, nombre: p.nombre, modalidad: p.modalidad, tipo_jornada: 'diurna', registrado_por: 'Demo' },
   }));
+  // Convenio enviado por WhatsApp; Juan, Ana y Pedro ya lo firmaron, María está pendiente.
+  const { convenio_id } = await enviarConvenio(db, empresa, { id: r.id, ...p, tipo_jornada: 'diurna' }, { enviadoPor: 'Demo' });
+  if (p.pin !== '8765') {
+    const { rows: [conv] } = await db.query(`SELECT datos FROM bitacora WHERE id = $1`, [convenio_id]);
+    await db.transaction((tx) => agregarEvento(tx, {
+      empresa_id: E, empleado_id: r.id, clase: 'convenio_firmado',
+      datos: {
+        convenio_id, version: conv.datos.version, hash_documentos: conv.datos.hash_documentos,
+        documentos: conv.datos.documentos.map(({ clave, hash }) => ({ clave, hash })),
+        metodo: 'codigo_whatsapp', telefono: p.telefono, ip: '187.190.0.1', agente: 'demo',
+      },
+    }));
+  }
 }
 
 /** Instante local: fecha 'YYYY-MM-DD' + 'HH:MM'. */

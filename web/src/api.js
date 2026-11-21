@@ -46,7 +46,29 @@ export const rh = {
   enviarFirmas: (body) => pedir('POST', '/rh/firmas/enviar', { body, headers: rhHeaders() }),
   recordar: (id) => pedir('POST', `/rh/firmas/${id}/recordar`, { headers: rhHeaders() }),
   verificar: () => pedir('GET', '/rh/cadena/verificar', { headers: rhHeaders() }),
+  empresa: () => pedir('GET', '/rh/empresa', { headers: rhHeaders() }),
+  guardarEmpresa: (body) => pedir('PATCH', '/rh/empresa', { body, headers: rhHeaders() }),
+  convenios: () => pedir('GET', '/rh/convenios', { headers: rhHeaders() }),
+  enviarConvenios: (body = {}) => pedir('POST', '/rh/convenios/enviar', { body, headers: rhHeaders() }),
+  recordarConvenio: (id) => pedir('POST', `/rh/convenios/${id}/recordar`, { headers: rhHeaders() }),
+  /** Descarga el expediente PDF y devuelve su huella SHA-256. */
+  async expediente({ empleado_id, desde, hasta, generado_por }) {
+    const q = new URLSearchParams({ empleado_id, desde, hasta, generado_por: generado_por || 'RH' });
+    const r = await fetch(`/api/rh/expediente.pdf?${q}`, { headers: rhHeaders() });
+    if (!r.ok) throw new ErrorApi(r.status, (await r.json().catch(() => null))?.error ?? `Error ${r.status}`);
+    const nombre = /filename="?([^";]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? 'expediente.pdf';
+    const url = URL.createObjectURL(await r.blob());
+    Object.assign(document.createElement('a'), { href: url, download: nombre }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return { nombre, huella: r.headers.get('x-expediente-sha256') };
+  },
   nomina: (semana) => pedir('GET', `/rh/nomina.csv?semana=${semana}`, { headers: rhHeaders() }),
+};
+
+export const convenios = {
+  ver: (id, codigo) => pedir('POST', `/convenios/${id}/ver`, { body: { codigo } }),
+  firmar: (id, codigo) => pedir('POST', `/convenios/${id}/firmar`, { body: { codigo, acepto: true } }),
+  rechazar: (id, codigo, motivo) => pedir('POST', `/convenios/${id}/rechazar`, { body: { codigo, motivo } }),
 };
 
 export const firmas = {

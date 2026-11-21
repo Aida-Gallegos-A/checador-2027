@@ -16,6 +16,7 @@ export default function ImportarEmpleados({ empresa, onCerrar, onImportado }) {
   const [error, setError] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [arrastrando, setArrastrando] = useState(false);
+  const [enviarConvenio, setEnviarConvenio] = useState(true);
 
   async function elegir(f) {
     if (!f) return;
@@ -37,7 +38,7 @@ export default function ImportarEmpleados({ empresa, onCerrar, onImportado }) {
   async function importar() {
     setOcupado(true); setError(null);
     try {
-      const r = await rh.importarEmpleados({ filas, confirmar: true });
+      const r = await rh.importarEmpleados({ filas, confirmar: true, enviar_convenio: enviarConvenio });
       setResultado(r);
       setPaso('listo');
       onImportado();
@@ -123,6 +124,12 @@ export default function ImportarEmpleados({ empresa, onCerrar, onImportado }) {
                 </tbody>
               </table>
             </div>
+            {previa.resumen.crear > 0 && (
+              <label className="casilla">
+                <input type="checkbox" checked={enviarConvenio} onChange={(e) => setEnviarConvenio(e.target.checked)} />
+                Enviar por WhatsApp el convenio y el aviso de privacidad a los {previa.resumen.crear} nuevos (los que tengan teléfono)
+              </label>
+            )}
             {error && <p className="error">{error}</p>}
             <div className="acciones">
               <button className="boton" onClick={importar} disabled={ocupado || aGuardar === 0}>
@@ -139,6 +146,7 @@ export default function ImportarEmpleados({ empresa, onCerrar, onImportado }) {
               <strong>Importación terminada</strong>
               <p>{resultado.creados.length} dados de alta · {resultado.resumen.actualizar} actualizados
                 {resultado.resumen.errores > 0 && ` · ${resultado.resumen.errores} filas con error no se importaron`}</p>
+              {resultado.convenios_enviados > 0 && <p>Convenio enviado por WhatsApp a {resultado.convenios_enviados} trabajadores para su firma.</p>}
             </div>
             {resultado.creados.length > 0 && (
               <>

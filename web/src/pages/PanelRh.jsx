@@ -1,9 +1,11 @@
 // Panel de RH: resumen con alertas, correcciones, firmas semanales e integridad/nómina.
 import { useCallback, useEffect, useState } from 'react';
 import Empleados from './Empleados.jsx';
+import Empresa from './Empresa.jsx';
+import Expediente from './Expediente.jsx';
 import { ErrorApi, fechaCorta, fechaHora, h, hora, MODALIDADES, rh, sumarDias, TIPOS, tokens } from '../api.js';
 
-const SECCIONES = { resumen: 'Resumen', empleados: 'Empleados', correcciones: 'Correcciones', firmas: 'Firmas semanales', integridad: 'Integridad y nómina' };
+const SECCIONES = { resumen: 'Resumen', empleados: 'Empleados', correcciones: 'Correcciones', firmas: 'Firmas semanales', integridad: 'Expediente y nómina', empresa: 'Empresa' };
 const ESTADO_FIRMA = { firmada: 'Firmada', pendiente: 'Pendiente', objetada: 'Objetada', sin_enviar: 'Sin enviar' };
 
 export default function PanelRh() {
@@ -64,6 +66,7 @@ export default function PanelRh() {
         {seccion === 'correcciones' && <Correcciones version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'firmas' && semana && <Firmas semana={semana} version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'integridad' && semana && <Integridad semana={semana} />}
+        {seccion === 'empresa' && <Empresa onCambio={recargar} onAviso={setAviso} />}
       </main>
     </div>
   );
@@ -171,6 +174,17 @@ function DetalleEmpleado({ empleado, semana, onCerrar, onCorreccion }) {
   const [d, setD] = useState(null);
   const [form, setForm] = useState(null);
   const [error, setError] = useState(null);
+  const [generando, setGenerando] = useState(false);
+
+  async function descargarExpediente() {
+    setGenerando(true);
+    try {
+      let quien = 'RH';
+      try { quien = localStorage.getItem('checador.supervisor') || 'RH'; } catch { /* sin almacenamiento */ }
+      await rh.expediente({ empleado_id: empleado.id, desde: sumarDias(semana, -21), hasta: sumarDias(semana, 6), generado_por: quien });
+    } catch (err) { setError(err.message); }
+    setGenerando(false);
+  }
 
   useEffect(() => { rh.semanaEmpleado(empleado.id, semana).then(setD).catch((e) => setError(e.message)); }, [empleado.id, semana]);
 
@@ -191,7 +205,8 @@ function DetalleEmpleado({ empleado, semana, onCerrar, onCorreccion }) {
     <div className="modal-fondo" onClick={onCerrar}>
       <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={empleado.nombre}>
         <header className="modal-cabeza">
-          <div><h2>{empleado.nombre}</h2><span className="tenue">{MODALIDADES[empleado.modalidad]} · jornada {empleado.tipo_jornada}</span></div>
+          <div><h2>{empleado.nombre}</h2><span className="tenue">{MODALIDADES[empleado.modalidad]} · jornada {empleado.tipo_jornada}</span>
+            <div><button className="enlace" onClick={descargarExpediente} disabled={generando}>{generando ? 'Generando expediente…' : 'Expediente PDF de las últimas 4 semanas'}</button></div></div>
           <button className="cerrar" onClick={onCerrar} aria-label="Cerrar">×</button>
         </header>
         {error && <p className="error">{error}</p>}
@@ -425,6 +440,8 @@ function Integridad({ semana }) {
   }
 
   return (
+    <>
+    <Expediente />
     <div className="lista-tarjetas">
       <section className="tarjeta">
         <h2>Integridad de la bitácora</h2>
@@ -444,11 +461,9 @@ function Integridad({ semana }) {
         <p className="tenue">Horas ordinarias, extra dobles, extra triples y estado de firma por trabajador, semana del {fechaCorta(semana)}.</p>
         <button className="boton" onClick={descargar}>Descargar CSV</button>
       </section>
-      <section className="tarjeta">
-        <h2>Expediente para inspección STPS</h2>
-        <p className="tenue">Próximo paso: PDF por trabajador y periodo con registros, evidencia, correcciones, firmas y convenio.</p>
-      </section>
+
       {error && <p className="error">{error}</p>}
     </div>
+    </>
   );
 }

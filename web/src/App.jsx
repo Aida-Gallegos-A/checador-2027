@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Kiosco from './pages/Kiosco.jsx';
 import PanelRh from './pages/PanelRh.jsx';
 import Firma from './pages/Firma.jsx';
+import Convenio from './pages/Convenio.jsx';
 
 function useRuta() {
   const [ruta, setRuta] = useState(() => location.hash.slice(1) || '/');
@@ -19,6 +20,8 @@ export default function App() {
   if (ruta.startsWith('/rh')) return <PanelRh />;
   const firma = /^\/firma\/(\d+)/.exec(ruta);
   if (firma) return <Firma resumenId={Number(firma[1])} />;
+  const convenio = /^\/convenio\/(\d+)/.exec(ruta);
+  if (convenio) return <Convenio convenioId={Number(convenio[1])} />;
 
   return (
     <main className="inicio">

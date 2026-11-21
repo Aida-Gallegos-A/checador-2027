@@ -5,6 +5,8 @@ import { agregarEvento, jsonCanonico, sha256, verificarCadena } from '../lib/cad
 import { fechaLocal, sumarDias } from '../lib/jornada.js';
 import { enviarWhatsApp } from '../lib/notificador.js';
 import { generarCodigo, generarSal, hashCodigo, igualSeguro, indicePin } from '../lib/seguridad.js';
+import { enviarConvenio, estadoConvenios, recordarConvenio } from '../convenios.js';
+import { generarExpediente } from '../expediente.js';
 import {
   armarResumen, empleadosActivos, estadoFirmas, listarCorrecciones, obtenerEmpresa,
   semanaActual, semanasDeEmpleados, TIPOS_CHECADA,
@@ -111,7 +113,11 @@ export function rutasRh(db) {
         });
         return e;
       });
-      res.status(201).json({ ...emp, pin });
+      // Al alta se manda el convenio por WhatsApp (si hay teléfono), salvo que RH diga lo contrario.
+      const convenio = b.enviar_convenio !== false && emp.telefono
+        ? await enviarConvenio(db, req.empresa, emp, { enviadoPor: limpio(b.registrado_por) ?? 'RH' })
+        : null;
+      res.status(201).json({ ...emp, pin, convenio: convenio && conDemo({ convenio_id: convenio.convenio_id }, convenio.codigo) });
     } catch (e) {
       if (esDuplicado(e)) return res.status(409).json({ error: 'Ya existe un empleado con ese número de empleado o ese PIN' });
       throw e;
@@ -229,14 +235,14 @@ export function rutasRh(db) {
           const pin = a.pin ?? pinAleatorio(req.empresa.id, pinesUsados);
           const { rows: [e] } = await tx.query(
             `INSERT INTO empleados (empresa_id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, pin_indice)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, numero, nombre`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, numero, nombre, telefono, modalidad, tipo_jornada`,
             [req.empresa.id, a.numero, a.nombre, a.puesto, a.telefono, a.modalidad, a.tipo_jornada ?? 'diurna', indicePin(req.empresa.id, pin)],
           );
           await agregarEvento(tx, {
             empresa_id: req.empresa.id, empleado_id: e.id, clase: 'nota',
             datos: { asunto: 'alta_empleado', origen: 'importacion_excel', fila: a.fila, numero: e.numero, nombre: e.nombre, modalidad: a.modalidad, tipo_jornada: a.tipo_jornada ?? 'diurna', registrado_por: registradoPor },
           });
-          nuevos.push({ fila: a.fila, numero: e.numero, nombre: e.nombre, pin });
+          nuevos.push({ fila: a.fila, numero: e.numero, nombre: e.nombre, pin, empleado: e });
         } else if (a.accion === 'actualizar') {
           const v = (k) => (a.cambios[k] ? a.cambios[k].despues : a.existente[k]);
           await tx.query(
@@ -251,7 +257,98 @@ export function rutasRh(db) {
       }
       return nuevos;
     });
-    res.json({ resumen, creados });
+
+    // Convenio por WhatsApp a los nuevos con teléfono (fuera de la transacción: el alta ya quedó).
+    let convenios = 0;
+    if (req.body.enviar_convenio !== false) {
+      for (const c of creados) {
+        if (!c.empleado.telefono) continue;
+        const r = await enviarConvenio(db, req.empresa, c.empleado, { enviadoPor: registradoPor });
+        Object.assign(c, conDemo({ convenio_id: r.convenio_id }, r.codigo));
+        convenios += 1;
+      }
+    }
+    res.json({ resumen, convenios_enviados: convenios, creados: creados.map(({ empleado, ...c }) => c) });
+  });
+
+  // ---------- Empresa ----------
+  r.get('/empresa', (req, res) => {
+    const { id, nombre, rfc, domicilio, correo_privacidad, zona_horaria } = req.empresa;
+    res.json({ id, nombre, rfc, domicilio, correo_privacidad, zona_horaria });
+  });
+
+  r.patch('/empresa', async (req, res) => {
+    const b = req.body ?? {};
+    if (b.nombre !== undefined && !limpio(b.nombre)) return res.status(400).json({ error: 'La razón social no puede quedar vacía' });
+    if (b.rfc && !/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i.test(String(b.rfc).trim())) return res.status(400).json({ error: 'RFC inválido' });
+    if (b.correo_privacidad && !/^\S+@\S+\.\S+$/.test(String(b.correo_privacidad).trim())) return res.status(400).json({ error: 'Correo inválido' });
+    const nuevo = {
+      nombre: b.nombre !== undefined ? limpio(b.nombre) : req.empresa.nombre,
+      rfc: b.rfc !== undefined ? limpio(b.rfc)?.toUpperCase() ?? null : req.empresa.rfc,
+      domicilio: b.domicilio !== undefined ? limpio(b.domicilio) : req.empresa.domicilio,
+      correo_privacidad: b.correo_privacidad !== undefined ? limpio(b.correo_privacidad) : req.empresa.correo_privacidad,
+    };
+    const cambios = Object.fromEntries(Object.entries(nuevo).filter(([k, v]) => v !== req.empresa[k]).map(([k, v]) => [k, { antes: req.empresa[k], despues: v }]));
+    if (Object.keys(cambios).length) {
+      await db.transaction(async (tx) => {
+        await tx.query(`UPDATE empresas SET nombre = $2, rfc = $3, domicilio = $4, correo_privacidad = $5 WHERE id = $1`,
+          [req.empresa.id, nuevo.nombre, nuevo.rfc, nuevo.domicilio, nuevo.correo_privacidad]);
+        await agregarEvento(tx, { empresa_id: req.empresa.id, clase: 'nota', datos: { asunto: 'cambio_empresa', cambios, registrado_por: limpio(b.registrado_por) ?? 'RH' } });
+      });
+    }
+    res.json({ ...req.empresa, ...nuevo });
+  });
+
+  // ---------- Convenios ----------
+  r.get('/convenios', async (req, res) => {
+    const empleados = await empleadosActivos(db, req.empresa.id);
+    const estado = await estadoConvenios(db, req.empresa.id);
+    const faltantes = ['rfc', 'domicilio', 'correo_privacidad'].filter((k) => !req.empresa[k]);
+    res.json({
+      empresa_incompleta: faltantes,
+      convenios: empleados.map((e) => ({ empleado: e, ...(estado.get(e.id) ?? { estado: 'sin_enviar' }) })),
+    });
+  });
+
+  // Sin empleado_ids: a todos los activos con teléfono que nunca lo han recibido.
+  // Con empleado_ids: reenvía a esos (nuevo código), salvo a quien ya firmó.
+  r.post('/convenios/enviar', async (req, res) => {
+    const ids = Array.isArray(req.body?.empleado_ids) ? req.body.empleado_ids.map(Number) : null;
+    const empleados = (await empleadosActivos(db, req.empresa.id)).filter((e) => !ids || ids.includes(e.id));
+    const estado = await estadoConvenios(db, req.empresa.id);
+    const enviados = [];
+    const omitidos = [];
+    for (const e of empleados) {
+      const actual = estado.get(e.id)?.estado ?? 'sin_enviar';
+      if (actual === 'firmado') { if (ids) omitidos.push({ empleado: e.nombre, motivo: 'Ya firmó' }); continue; }
+      if (!ids && actual !== 'sin_enviar') continue;
+      if (!e.telefono) { omitidos.push({ empleado: e.nombre, motivo: 'Sin teléfono' }); continue; }
+      const r = await enviarConvenio(db, req.empresa, e, { enviadoPor: limpio(req.body?.registrado_por) ?? 'RH' });
+      enviados.push(conDemo({ empleado_id: e.id, empleado: e.nombre, convenio_id: r.convenio_id }, r.codigo));
+    }
+    res.json({ enviados, omitidos });
+  });
+
+  r.post('/convenios/:id/recordar', async (req, res) => {
+    const r2 = await recordarConvenio(db, req.empresa, Number(req.params.id));
+    if (r2.error) return res.status(r2.status).json({ error: r2.error });
+    res.json(conDemo({ numero: r2.numero }, r2.codigo));
+  });
+
+  // ---------- Expediente para inspección ----------
+  r.get('/expediente.pdf', async (req, res) => {
+    const empleadoId = Number(req.query.empleado_id);
+    const desde = String(req.query.desde ?? '');
+    const hasta = String(req.query.hasta ?? '');
+    if (!Number.isInteger(empleadoId) || !FECHA.test(desde) || !FECHA.test(hasta) || desde > hasta) {
+      return res.status(400).json({ error: 'empleado_id, desde y hasta (AAAA-MM-DD) son obligatorios' });
+    }
+    if (sumarDias(desde, 400) < hasta) return res.status(400).json({ error: 'El periodo máximo es de 400 días' });
+    const generadoPor = limpio(req.query.generado_por) ?? 'RH';
+    const pdf = await generarExpediente(db, req.empresa, { empleadoId, desde, hasta, generadoPor });
+    if (!pdf) return res.status(404).json({ error: 'Empleado no encontrado' });
+    res.set('X-Expediente-Sha256', pdf.huella).set('Access-Control-Expose-Headers', 'X-Expediente-Sha256');
+    res.type('application/pdf').attachment(pdf.nombreArchivo).send(pdf.buffer);
   });
 
   // Nuevo PIN (olvido o sospecha de que alguien más lo usa). El PIN nunca se guarda en claro.
@@ -470,6 +567,9 @@ export function rutasRh(db) {
 
   return r;
 }
+
+/** En modo demo la respuesta incluye el código (en producción solo llega por WhatsApp). */
+const conDemo = (obj, codigo) => (process.env.MODO_DEMO === 'true' ? { ...obj, codigo_demo: codigo } : obj);
 
 const MODALIDADES = ['presencial', 'campo', 'home_office'];
 const JORNADAS = ['diurna', 'nocturna', 'mixta'];

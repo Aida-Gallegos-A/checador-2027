@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS bitacora (
   hash           text NOT NULL UNIQUE
 );
 
+-- Migración: nuevas clases de evento (convenio). Se reemplaza la restricción en bases existentes.
+ALTER TABLE bitacora DROP CONSTRAINT IF EXISTS bitacora_clase_check;
+ALTER TABLE bitacora ADD CONSTRAINT bitacora_clase_check CHECK (clase IN (
+  'checada', 'correccion_solicitada', 'correccion_aprobada', 'correccion_rechazada',
+  'resumen_enviado', 'recordatorio', 'firma', 'objecion', 'nota',
+  'convenio_enviado', 'convenio_firmado', 'convenio_rechazado'));
+
+-- Migración: datos de la empresa para el aviso de privacidad y el expediente.
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS rfc text;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS domicilio text;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS correo_privacidad text;
+
 CREATE INDEX IF NOT EXISTS bitacora_empleado_hora ON bitacora (empresa_id, empleado_id, clase, hora);
 CREATE INDEX IF NOT EXISTS bitacora_empresa_id ON bitacora (empresa_id, id);
 

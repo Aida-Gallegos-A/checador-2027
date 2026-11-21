@@ -190,6 +190,72 @@ test('importación: vista previa sin guardar, errores por fila, alta y actualiza
   assert.equal(otraVez.body.resumen.sin_cambios, 3, 'subir el mismo archivo otra vez no duplica');
 });
 
+test('convenio: se envía al dar de alta, se lee y se firma con código', async () => {
+  const alta = await api('POST', '/rh/empleados', RH, { numero: '20', nombre: 'Rosa Campos', modalidad: 'campo', telefono: '5511112222' });
+  assert.equal(alta.status, 201);
+  const { convenio_id, codigo_demo } = alta.body.convenio;
+  assert.match(codigo_demo, /^\d{6}$/);
+
+  const sinTel = await api('POST', '/rh/empleados', RH, { numero: '21', nombre: 'Sin Tel', modalidad: 'presencial' });
+  assert.equal(sinTel.body.convenio, null);
+
+  let estado = (await api('GET', '/rh/convenios', RH)).body;
+  assert.equal(estado.convenios.find((c) => c.empleado.id === alta.body.id).estado, 'pendiente');
+  assert.deepEqual(estado.empresa_incompleta, ['rfc', 'domicilio', 'correo_privacidad']);
+
+  const JSONH = { 'content-type': 'application/json' };
+  assert.equal((await api('POST', `/convenios/${convenio_id}/ver`, JSONH, { codigo: codigo_demo === '123456' ? '654321' : '123456' })).status, 403);
+  const ver = await api('POST', `/convenios/${convenio_id}/ver`, JSONH, { codigo: codigo_demo });
+  assert.equal(ver.status, 200);
+  assert.equal(ver.body.documentos.length, 3);
+  assert.match(ver.body.documentos[0].texto, /Rosa Campos/);
+  assert.match(ver.body.documentos[0].texto, /GPS ÚNICAMENTE en el momento/, 'el texto se adapta a la modalidad de campo');
+
+  assert.equal((await api('POST', `/convenios/${convenio_id}/firmar`, JSONH, { codigo: codigo_demo })).status, 400, 'hay que marcar que acepta');
+  const firma = await api('POST', `/convenios/${convenio_id}/firmar`, JSONH, { codigo: codigo_demo, acepto: true });
+  assert.equal(firma.status, 201);
+  assert.equal((await api('POST', `/convenios/${convenio_id}/firmar`, JSONH, { codigo: codigo_demo, acepto: true })).status, 409);
+
+  estado = (await api('GET', '/rh/convenios', RH)).body;
+  assert.equal(estado.convenios.find((c) => c.empleado.id === alta.body.id).estado, 'firmado');
+
+  const reenvio = await api('POST', '/rh/convenios/enviar', RH, { empleado_ids: [alta.body.id, sinTel.body.id] });
+  assert.deepEqual(reenvio.body.omitidos.map((o) => o.motivo).sort(), ['Sin teléfono', 'Ya firmó']);
+
+  // A Juan (sin convenio) se le envía con "enviar a pendientes"; un recordatorio cambia el código.
+  await api('PATCH', '/rh/empleados/1', RH, { telefono: '5500000001' });
+  const masivo = await api('POST', '/rh/convenios/enviar', RH, {});
+  const juan = masivo.body.enviados.find((e) => e.empleado_id === 1);
+  assert.ok(juan);
+  const rec = await api('POST', `/rh/convenios/${juan.convenio_id}/recordar`, RH);
+  assert.equal(rec.status, 200);
+  if (rec.body.codigo_demo !== juan.codigo_demo) {
+    assert.equal((await api('POST', `/convenios/${juan.convenio_id}/ver`, JSONH, { codigo: juan.codigo_demo })).status, 403, 'el código anterior ya no sirve');
+  }
+  const rechazo = await api('POST', `/convenios/${juan.convenio_id}/rechazar`, JSONH, { codigo: rec.body.codigo_demo, motivo: 'Quiero revisarlo con mi abogado' });
+  assert.equal(rechazo.status, 201);
+});
+
+test('expediente PDF: se genera, trae su huella y queda constancia en la bitácora', async () => {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const r = await fetch(`${base}/rh/expediente.pdf?empleado_id=1&desde=2026-01-01&hasta=${hoy}&generado_por=Inspector%20demo`, { headers: RH });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /application\/pdf/);
+  const pdf = Buffer.from(await r.arrayBuffer());
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(pdf.length > 3000);
+
+  const huella = r.headers.get('x-expediente-sha256');
+  const { createHash } = await import('node:crypto');
+  assert.equal(createHash('sha256').update(pdf).digest('hex'), huella);
+  const { rows: [nota] } = await db.query(`SELECT datos FROM bitacora WHERE clase = 'nota' AND datos->>'asunto' = 'expediente_generado' ORDER BY id DESC LIMIT 1`);
+  assert.equal(nota.datos.pdf_sha256, huella);
+  assert.equal(nota.datos.generado_por, 'Inspector demo');
+
+  assert.equal((await api('GET', '/rh/expediente.pdf?empleado_id=1&desde=2026-02-01&hasta=2026-01-01', RH)).status, 400);
+  assert.equal((await api('GET', `/rh/expediente.pdf?empleado_id=999&desde=2026-01-01&hasta=${hoy}`, RH)).status, 404);
+});
+
 test('la cadena está íntegra y detecta una alteración directa en la base', async () => {
   const v = await api('GET', '/rh/cadena/verificar', RH);
   assert.equal(v.body.integra, true);

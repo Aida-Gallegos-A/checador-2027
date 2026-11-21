@@ -4,7 +4,12 @@ import { MODALIDADES, rh } from '../api.js';
 import ImportarEmpleados from './ImportarEmpleados.jsx';
 
 const JORNADAS = { diurna: 'Diurna (8 h)', nocturna: 'Nocturna (7 h)', mixta: 'Mixta (7.5 h)' };
-const VACIO = { numero: '', nombre: '', puesto: '', telefono: '', modalidad: 'presencial', tipo_jornada: 'diurna', pin: '' };
+const VACIO = { numero: '', nombre: '', puesto: '', telefono: '', modalidad: 'presencial', tipo_jornada: 'diurna', pin: '', enviar_convenio: true };
+const ESTADO_CONVENIO = { firmado: 'Firmado', pendiente: 'Pendiente', rechazado: 'Tiene dudas', sin_enviar: 'Sin enviar' };
+const CLASE_CONVENIO = { firmado: 'firmada', pendiente: 'pendiente', rechazado: 'objetada', sin_enviar: 'sin_enviar' };
+
+/** Texto del aviso con el enlace de demo para abrir la firma (en producción el código solo llega por WhatsApp). */
+const enlaceDemo = (c) => (c?.codigo_demo ? <> · Demo: <a href={'#/convenio/' + c.convenio_id} target="_blank" rel="noreferrer">abrir convenio</a> con el código <strong>{c.codigo_demo}</strong></> : null);
 
 export default function Empleados({ empresa, onCambio, onAviso }) {
   const [lista, setLista] = useState(null);
@@ -12,8 +17,11 @@ export default function Empleados({ empresa, onCambio, onAviso }) {
   const [form, setForm] = useState(null); // null | { modo: 'alta' | 'editar', datos }
   const [verBajas, setVerBajas] = useState(false);
   const [error, setError] = useState(null);
+  const [convenios, setConvenios] = useState(null);
 
-  const cargar = () => rh.empleados().then(setLista).catch((e) => setError(e.message));
+  const cargar = () => Promise.all([rh.empleados(), rh.convenios()])
+    .then(([l, c]) => { setLista(l); setConvenios(c); })
+    .catch((e) => setError(e.message));
   useEffect(() => { cargar(); }, []);
 
   const listo = async (mensaje) => { setForm(null); setError(null); await cargar(); onCambio(); onAviso(mensaje); };
@@ -24,7 +32,8 @@ export default function Empleados({ empresa, onCambio, onAviso }) {
     try {
       if (form.modo === 'alta') {
         const r = await rh.altaEmpleado({ ...d, pin: d.pin || undefined });
-        await listo(<span>{r.nombre} dado de alta. PIN para el kiosco: <strong className="pin-grande">{r.pin}</strong> (anótalo: no se vuelve a mostrar).</span>);
+        await listo(<span>{r.nombre} dado de alta. PIN para el kiosco: <strong className="pin-grande">{r.pin}</strong> (anótalo: no se vuelve a mostrar).
+          {r.convenio ? <> Convenio enviado por WhatsApp{enlaceDemo(r.convenio)}.</> : d.telefono ? '' : ' Sin teléfono no se pudo enviar el convenio.'}</span>);
       } else {
         await rh.editarEmpleado(d.id, {
           nombre: d.nombre, puesto: d.puesto, telefono: d.telefono, modalidad: d.modalidad, tipo_jornada: d.tipo_jornada,
@@ -55,9 +64,33 @@ export default function Empleados({ empresa, onCambio, onAviso }) {
     } catch (err) { setError(err.message); }
   }
 
-  if (!lista) return <p>{error ?? 'Cargando…'}</p>;
+  async function enviarConvenio(ids) {
+    try {
+      const r = await rh.enviarConvenios(ids ? { empleado_ids: ids } : {});
+      await cargar();
+      onAviso(<span>
+        {r.enviados.length ? `Convenio enviado por WhatsApp a ${r.enviados.map((x) => x.empleado).join(', ')}.` : 'No había a quién enviar.'}
+        {r.omitidos.length > 0 && ` No se envió a: ${r.omitidos.map((o) => `${o.empleado} (${o.motivo.toLowerCase()})`).join(', ')}.`}
+        {r.enviados.length === 1 && enlaceDemo(r.enviados[0])}
+      </span>);
+    } catch (err) { setError(err.message); }
+  }
+
+  async function recordarConvenio(c, nombre) {
+    try {
+      const r = await rh.recordarConvenio(c.convenio_id);
+      await cargar();
+      onAviso(<span>Recordatorio {r.numero} enviado a {nombre}{enlaceDemo({ ...r, convenio_id: c.convenio_id })}.</span>);
+    } catch (err) { setError(err.message); }
+  }
+
+  if (!lista || !convenios) return <p>{error ?? 'Cargando…'}</p>;
   const visibles = lista.filter((e) => verBajas || e.activo);
   const bajas = lista.filter((e) => !e.activo).length;
+  const conv = new Map(convenios.convenios.map((c) => [c.empleado.id, c]));
+  const porEnviar = convenios.convenios.filter((c) => c.estado === 'sin_enviar' && c.empleado.telefono).length;
+  const firmados = convenios.convenios.filter((c) => c.estado === 'firmado').length;
+  const FALTA = { rfc: 'RFC', domicilio: 'domicilio', correo_privacidad: 'correo para derechos ARCO' };
 
   return (
     <>
@@ -72,9 +105,21 @@ export default function Empleados({ empresa, onCambio, onAviso }) {
       </div>
       {error && !form && <p className="error">{error}</p>}
 
+      {convenios.empresa_incompleta.length > 0 && (
+        <p className="nota-alerta">
+          Falta capturar el {convenios.empresa_incompleta.map((k) => FALTA[k]).join(', ')} de la empresa en la pestaña <strong>Empresa</strong>.
+          El aviso de privacidad que firman los trabajadores lo necesita.
+        </p>
+      )}
+      <div className="franja-convenio">
+        <span><strong>Convenio de registro electrónico:</strong> {firmados} de {convenios.convenios.length} firmados.
+          <span className="tenue"> Es lo que acredita que el registro fue acordado (prueba plena).</span></span>
+        {porEnviar > 0 && <button className="boton-secundario" onClick={() => enviarConvenio()}>Enviar a {porEnviar} sin convenio</button>}
+      </div>
+
       <div className="tabla-scroll">
         <table>
-          <thead><tr><th>No.</th><th>Nombre</th><th>Modalidad</th><th>Jornada</th><th>WhatsApp</th><th /></tr></thead>
+          <thead><tr><th>No.</th><th>Nombre</th><th>Modalidad</th><th>Jornada</th><th>WhatsApp</th><th>Convenio</th><th /></tr></thead>
           <tbody>
             {visibles.map((e) => (
               <tr key={e.id} className={e.activo ? '' : 'fila-baja'}>
@@ -83,6 +128,24 @@ export default function Empleados({ empresa, onCambio, onAviso }) {
                 <td>{MODALIDADES[e.modalidad]}</td>
                 <td>{JORNADAS[e.tipo_jornada]}</td>
                 <td>{e.telefono ?? <span className="texto-critico">Falta</span>}</td>
+                <td>
+                  {e.activo && (() => {
+                    const c = conv.get(e.id) ?? { estado: 'sin_enviar' };
+                    return (
+                      <>
+                        <span className={`estado estado-${CLASE_CONVENIO[c.estado]}`} title={c.motivo ?? ''}>{ESTADO_CONVENIO[c.estado]}</span>
+                        {c.recordatorios > 0 && <small className="tenue"> {c.recordatorios} rec.</small>}
+                        {c.motivo && <p className="objecion">“{c.motivo}”</p>}
+                        <div>
+                          {c.estado === 'pendiente' && <button className="enlace" onClick={() => recordarConvenio(c, e.nombre)}>Recordar</button>}
+                          {(c.estado === 'sin_enviar' || c.estado === 'rechazado') && e.telefono && (
+                            <button className="enlace" onClick={() => enviarConvenio([e.id])}>{c.estado === 'rechazado' ? 'Reenviar' : 'Enviar'}</button>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </td>
                 <td className="celda-acciones">
                   {e.activo && <button className="enlace" onClick={() => { setError(null); setForm({ modo: 'editar', datos: { ...e, puesto: e.puesto ?? '', telefono: e.telefono ?? '' } }); }}>Editar</button>}
                   {e.activo && <button className="enlace" onClick={() => cambiarPin(e)}>Nuevo PIN</button>}
@@ -146,6 +209,12 @@ function FormEmpleado({ form, setForm, onSubmit, error }) {
         <label>PIN para el kiosco (opcional)
           <input value={d.pin} onChange={(e) => setForm({ ...form, datos: { ...d, pin: e.target.value.replace(/\D/g, '').slice(0, 4) } })}
             inputMode="numeric" placeholder="Vacío = se genera uno al azar" />
+        </label>
+      )}
+      {alta && (
+        <label className="casilla">
+          <input type="checkbox" checked={d.enviar_convenio} onChange={(e) => setForm({ ...form, datos: { ...d, enviar_convenio: e.target.checked } })} />
+          Enviar el convenio y el aviso de privacidad por WhatsApp para que los firme
         </label>
       )}
       {error && <p className="error">{error}</p>}

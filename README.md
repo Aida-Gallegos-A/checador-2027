@@ -45,7 +45,13 @@ Abre http://localhost:5173
 - Empleados: alta individual o **importación desde Excel/CSV** (plantilla descargable, vista previa con
   errores por fila antes de guardar, actualización por número de empleado, PINs generados en Excel),
   cambios, nuevo PIN y bajas; todo queda en la bitácora.
-- Panel: resumen con alertas, nómina en CSV y verificación de integridad.
+- **Convenio de registro electrónico** + aviso de privacidad + política de jornada (modelos adaptados a la
+  modalidad): se envían por WhatsApp al alta, el trabajador los lee y firma con código; el texto exacto
+  queda en la bitácora con su huella. Recordatorios y "tengo dudas".
+- **Expediente PDF para inspección STPS o demanda**: convenio firmado, semanas y su confirmación, cada
+  registro con su evidencia (fotos verificadas contra su huella, GPS, IP), correcciones, constancias,
+  textos firmados y hashes de cada evento. La huella del PDF generado queda en la bitácora.
+- Panel: resumen con alertas, nómina en CSV, verificación de integridad y datos de la empresa.
 
 **Web** (`web/`, React + Vite): kiosco con cámara y cuenta regresiva, panel de RH y página de firma.
 
@@ -67,7 +73,7 @@ incluida la detección de una alteración directa en la base.
 
 ## Siguientes pasos
 
-1. Expediente PDF para inspección STPS (registros, evidencia, correcciones, firmas, convenio).
+1. Conectar WhatsApp Business o Twilio (hoy los mensajes se escriben en la consola).
 2. App de campo: modos 1-2-3, selfie + GPS solo al checar, sin conexión, visitas/rondines (Capacitor).
 3. Home office: iniciar/pausa/terminar web, desconexión documentada, expediente NOM-037.
 4. Usuarios con login y roles (RH, supervisor, trabajador) en lugar de tokens.
