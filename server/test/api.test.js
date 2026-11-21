@@ -116,6 +116,36 @@ test('resumen de RH y nómina responden', async () => {
   assert.match(csv.body, /horas_ordinarias/);
 });
 
+test('empleados: alta con PIN generado, cambio de PIN, edición y baja', async () => {
+  const alta = await api('POST', '/rh/empleados', RH, { numero: '2', nombre: 'Luisa Díaz', modalidad: 'campo', telefono: '55 1234 5678' });
+  assert.equal(alta.status, 201);
+  assert.match(alta.body.pin, /^\d{4}$/);
+
+  const dup = await api('POST', '/rh/empleados', RH, { numero: '2', nombre: 'Otra', modalidad: 'presencial' });
+  assert.equal(dup.status, 409);
+  const pinUsado = await api('POST', '/rh/empleados', RH, { numero: '3', nombre: 'Otra', modalidad: 'presencial', pin: '1234' });
+  assert.equal(pinUsado.status, 409);
+  const mala = await api('POST', '/rh/empleados', RH, { numero: '4', nombre: 'X', modalidad: 'oficina' });
+  assert.equal(mala.status, 400);
+
+  const id = (await api('POST', '/kiosco/identificar', KIOSCO, { pin: alta.body.pin })).body.empleado.id;
+  assert.equal(id, alta.body.id);
+
+  const nuevo = await api('POST', `/rh/empleados/${id}/pin`, RH, {});
+  assert.notEqual(nuevo.body.pin, alta.body.pin);
+  assert.equal((await api('POST', '/kiosco/identificar', KIOSCO, { pin: alta.body.pin })).status, 404);
+
+  const edit = await api('PATCH', `/rh/empleados/${id}`, RH, { puesto: 'Técnica', tipo_jornada: 'nocturna' });
+  assert.equal(edit.body.tipo_jornada, 'nocturna');
+
+  const baja = await api('PATCH', `/rh/empleados/${id}`, RH, { activo: false, motivo: 'Renuncia' });
+  assert.equal(baja.body.activo, false);
+  assert.equal((await api('POST', '/kiosco/identificar', KIOSCO, { pin: nuevo.body.pin })).status, 404, 'una baja ya no puede checar');
+
+  const { rows } = await db.query(`SELECT datos->>'asunto' AS asunto FROM bitacora WHERE empleado_id = $1 AND clase = 'nota' ORDER BY id`, [id]);
+  assert.deepEqual(rows.map((r) => r.asunto), ['alta_empleado', 'cambio_pin', 'cambio_empleado', 'baja_empleado']);
+});
+
 test('la cadena está íntegra y detecta una alteración directa en la base', async () => {
   const v = await api('GET', '/rh/cadena/verificar', RH);
   assert.equal(v.body.integra, true);

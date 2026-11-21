@@ -203,7 +203,18 @@ td { font-variant-numeric: tabular-nums; }
 .modal-cabeza { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
 .cerrar { background: none; border: 0; font-size: 1.6rem; color: var(--tenue); line-height: 1; }
 
+.acciones-entre { justify-content: space-between; align-items: center; }
+.casilla { display: flex; align-items: center; gap: 0.4rem; color: var(--tenue); }
+.casilla input { width: auto; }
+.fila-baja { opacity: 0.55; }
+.celda-acciones { white-space: nowrap; }
+.celda-acciones .enlace + .enlace { margin-left: 0.9rem; }
+.modal-chico { width: min(560px, 100%); }
+.dos-columnas { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+.pin-grande { font-size: 1.3rem; letter-spacing: 0.15em; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 640px) {
+  .dos-columnas { grid-template-columns: 1fr; }
   .kiosco-tipos { grid-template-columns: 1fr 1fr; }
   .kiosco-tipo { min-height: 96px; font-size: 1.05rem; }
   .teclado { grid-template-columns: repeat(3, 76px); }

@@ -1,4 +1,5 @@
 // Panel de RH: resumen con alertas, correcciones, firmas semanales, integridad y nómina.
+import { randomInt } from 'node:crypto';
 import { Router } from 'express';
 import { agregarEvento, jsonCanonico, sha256, verificarCadena } from '../lib/cadena.js';
 import { fechaLocal, sumarDias } from '../lib/jornada.js';
@@ -79,34 +80,105 @@ export function rutasRh(db) {
   });
 
   // ---------- Empleados ----------
+  const COLUMNAS_EMP = 'id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, activo, pin_indice IS NOT NULL AS tiene_pin, creado_en';
+  const esDuplicado = (e) => e.code === '23505' || /unique|duplicate/i.test(String(e.message));
+
   r.get('/empleados', async (req, res) => {
-    res.json(await empleadosActivos(db, req.empresa.id));
+    const { rows } = await db.query(
+      `SELECT ${COLUMNAS_EMP} FROM empleados WHERE empresa_id = $1 ORDER BY activo DESC, nombre`,
+      [req.empresa.id],
+    );
+    res.json(rows);
   });
 
+  // Alta. Si no se da PIN, se genera uno de 4 dígitos que no use nadie más; se devuelve una sola vez.
   r.post('/empleados', async (req, res) => {
-    const { numero, nombre, puesto = null, telefono = null, modalidad, tipo_jornada = 'diurna', pin } = req.body ?? {};
-    if (!numero || !nombre || !modalidad) return res.status(400).json({ error: 'numero, nombre y modalidad son obligatorios' });
-    if (pin && !/^\d{4,8}$/.test(String(pin))) return res.status(400).json({ error: 'El PIN debe tener de 4 a 8 dígitos' });
+    const b = req.body ?? {};
+    const error = validarEmpleado(b, { alta: true });
+    if (error) return res.status(400).json({ error });
+    const pin = b.pin ? String(b.pin) : await pinLibre(db, req.empresa.id);
     try {
       const emp = await db.transaction(async (tx) => {
         const { rows: [e] } = await tx.query(
           `INSERT INTO empleados (empresa_id, numero, nombre, puesto, telefono, modalidad, tipo_jornada, pin_indice)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           RETURNING id, numero, nombre, puesto, telefono, modalidad, tipo_jornada`,
-          [req.empresa.id, String(numero), nombre, puesto, telefono, modalidad, tipo_jornada,
-            pin ? indicePin(req.empresa.id, String(pin)) : null],
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${COLUMNAS_EMP}`,
+          [req.empresa.id, String(b.numero).trim(), b.nombre.trim(), limpio(b.puesto), limpio(b.telefono),
+            b.modalidad, b.tipo_jornada ?? 'diurna', indicePin(req.empresa.id, pin)],
         );
         await agregarEvento(tx, {
           empresa_id: req.empresa.id, empleado_id: e.id, clase: 'nota',
-          datos: { asunto: 'alta_empleado', modalidad, tipo_jornada, registrado_por: req.body.registrado_por ?? 'RH' },
+          datos: { asunto: 'alta_empleado', numero: e.numero, nombre: e.nombre, modalidad: e.modalidad, tipo_jornada: e.tipo_jornada, registrado_por: limpio(b.registrado_por) ?? 'RH' },
         });
         return e;
       });
-      res.status(201).json(emp);
+      res.status(201).json({ ...emp, pin });
     } catch (e) {
-      if (String(e.message).includes('unique') || e.code === '23505') {
-        return res.status(409).json({ error: 'Ya existe un empleado con ese número o ese PIN' });
-      }
+      if (esDuplicado(e)) return res.status(409).json({ error: 'Ya existe un empleado con ese número de empleado o ese PIN' });
+      throw e;
+    }
+  });
+
+  // Cambios y baja/reactivación. El número de empleado no cambia. Cada cambio queda en la bitácora.
+  r.patch('/empleados/:id', async (req, res) => {
+    const b = req.body ?? {};
+    const error = validarEmpleado(b, { alta: false });
+    if (error) return res.status(400).json({ error });
+    const resultado = await db.transaction(async (tx) => {
+      const { rows: [antes] } = await tx.query(
+        `SELECT ${COLUMNAS_EMP} FROM empleados WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+        [Number(req.params.id), req.empresa.id],
+      );
+      if (!antes) return null;
+      const nuevo = {
+        nombre: b.nombre !== undefined ? b.nombre.trim() : antes.nombre,
+        puesto: b.puesto !== undefined ? limpio(b.puesto) : antes.puesto,
+        telefono: b.telefono !== undefined ? limpio(b.telefono) : antes.telefono,
+        modalidad: b.modalidad ?? antes.modalidad,
+        tipo_jornada: b.tipo_jornada ?? antes.tipo_jornada,
+        activo: typeof b.activo === 'boolean' ? b.activo : antes.activo,
+      };
+      const cambios = Object.fromEntries(
+        Object.entries(nuevo).filter(([k, v]) => v !== antes[k]).map(([k, v]) => [k, { antes: antes[k], despues: v }]),
+      );
+      if (Object.keys(cambios).length === 0) return antes;
+      const { rows: [despues] } = await tx.query(
+        `UPDATE empleados SET nombre = $3, puesto = $4, telefono = $5, modalidad = $6, tipo_jornada = $7, activo = $8
+          WHERE id = $1 AND empresa_id = $2 RETURNING ${COLUMNAS_EMP}`,
+        [antes.id, req.empresa.id, nuevo.nombre, nuevo.puesto, nuevo.telefono, nuevo.modalidad, nuevo.tipo_jornada, nuevo.activo],
+      );
+      const asunto = cambios.activo ? (nuevo.activo ? 'reactivacion_empleado' : 'baja_empleado') : 'cambio_empleado';
+      await agregarEvento(tx, {
+        empresa_id: req.empresa.id, empleado_id: antes.id, clase: 'nota',
+        datos: { asunto, cambios, motivo: limpio(b.motivo), registrado_por: limpio(b.registrado_por) ?? 'RH' },
+      });
+      return despues;
+    });
+    if (!resultado) return res.status(404).json({ error: 'Empleado no encontrado' });
+    res.json(resultado);
+  });
+
+  // Nuevo PIN (olvido o sospecha de que alguien más lo usa). El PIN nunca se guarda en claro.
+  r.post('/empleados/:id/pin', async (req, res) => {
+    const b = req.body ?? {};
+    if (b.pin && !/^\d{4}$/.test(String(b.pin))) return res.status(400).json({ error: 'El PIN debe tener 4 dígitos' });
+    const pin = b.pin ? String(b.pin) : await pinLibre(db, req.empresa.id);
+    try {
+      const ok = await db.transaction(async (tx) => {
+        const { rows: [e] } = await tx.query(
+          `UPDATE empleados SET pin_indice = $3 WHERE id = $1 AND empresa_id = $2 RETURNING id`,
+          [Number(req.params.id), req.empresa.id, indicePin(req.empresa.id, pin)],
+        );
+        if (!e) return false;
+        await agregarEvento(tx, {
+          empresa_id: req.empresa.id, empleado_id: e.id, clase: 'nota',
+          datos: { asunto: 'cambio_pin', registrado_por: limpio(b.registrado_por) ?? 'RH' },
+        });
+        return true;
+      });
+      if (!ok) return res.status(404).json({ error: 'Empleado no encontrado' });
+      res.json({ pin });
+    } catch (e) {
+      if (esDuplicado(e)) return res.status(409).json({ error: 'Ese PIN ya lo usa otra persona' });
       throw e;
     }
   });
@@ -300,6 +372,37 @@ export function rutasRh(db) {
   });
 
   return r;
+}
+
+const MODALIDADES = ['presencial', 'campo', 'home_office'];
+const JORNADAS = ['diurna', 'nocturna', 'mixta'];
+const limpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+function validarEmpleado(b, { alta }) {
+  if (alta) {
+    if (!limpio(String(b.numero ?? ''))) return 'El número de empleado es obligatorio';
+    if (!limpio(b.nombre)) return 'El nombre es obligatorio';
+    if (!b.modalidad) return 'La modalidad es obligatoria';
+  } else if (b.nombre !== undefined && !limpio(b.nombre)) {
+    return 'El nombre no puede quedar vacío';
+  }
+  if (b.modalidad !== undefined && !MODALIDADES.includes(b.modalidad)) return 'Modalidad inválida';
+  if (b.tipo_jornada !== undefined && !JORNADAS.includes(b.tipo_jornada)) return 'Tipo de jornada inválido';
+  if (b.pin && !/^\d{4}$/.test(String(b.pin))) return 'El PIN debe tener 4 dígitos';
+  if (b.telefono && !/^\+?[\d\s-]{10,16}$/.test(String(b.telefono))) return 'Teléfono inválido (10 dígitos, con o sin +52)';
+  return null;
+}
+
+/** PIN de 4 dígitos que nadie más usa en la empresa (evita los obvios). */
+async function pinLibre(db, empresaId) {
+  const obvios = new Set(['0000', '1111', '1234', '4321', '9999', '2580']);
+  for (let i = 0; i < 50; i++) {
+    const pin = String(randomInt(0, 10_000)).padStart(4, '0');
+    if (obvios.has(pin)) continue;
+    const { rows } = await db.query(`SELECT 1 FROM empleados WHERE empresa_id = $1 AND pin_indice = $2`, [empresaId, indicePin(empresaId, pin)]);
+    if (rows.length === 0) return pin;
+  }
+  throw new Error('No se encontró un PIN libre');
 }
 
 const TEXTO_BANDERA = {

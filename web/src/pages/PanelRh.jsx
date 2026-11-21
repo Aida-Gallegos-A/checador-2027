@@ -1,8 +1,9 @@
 // Panel de RH: resumen con alertas, correcciones, firmas semanales e integridad/nómina.
 import { useCallback, useEffect, useState } from 'react';
+import Empleados from './Empleados.jsx';
 import { ErrorApi, fechaCorta, fechaHora, h, hora, MODALIDADES, rh, sumarDias, TIPOS, tokens } from '../api.js';
 
-const SECCIONES = { resumen: 'Resumen', correcciones: 'Correcciones', firmas: 'Firmas semanales', integridad: 'Integridad y nómina' };
+const SECCIONES = { resumen: 'Resumen', empleados: 'Empleados', correcciones: 'Correcciones', firmas: 'Firmas semanales', integridad: 'Integridad y nómina' };
 const ESTADO_FIRMA = { firmada: 'Firmada', pendiente: 'Pendiente', objetada: 'Objetada', sin_enviar: 'Sin enviar' };
 
 export default function PanelRh() {
@@ -59,6 +60,7 @@ export default function PanelRh() {
 
       <main className="panel-contenido">
         {seccion === 'resumen' && datos && <Resumen datos={datos} semana={semana} onCambio={recargar} onAviso={setAviso} />}
+        {seccion === 'empleados' && <Empleados onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'correcciones' && <Correcciones version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'firmas' && semana && <Firmas semana={semana} version={version} onCambio={recargar} onAviso={setAviso} />}
         {seccion === 'integridad' && semana && <Integridad semana={semana} />}
