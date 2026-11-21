@@ -11,3 +11,6 @@ server/storage/
 *.log
 .DS_Store
 Thumbs.db
+
+# Paquete de publicación (Hostinger)
+deploy_pkg/
