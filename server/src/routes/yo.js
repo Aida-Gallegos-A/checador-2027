@@ -47,7 +47,12 @@ export function rutasYo(db) {
     const { rows: [emp] } = await db.query(
       `SELECT id, nombre, telefono FROM empleados WHERE telefono = $1 AND activo ORDER BY id LIMIT 1`, [telefono],
     );
-    if (!emp) return res.json(respuesta);
+    if (!emp) {
+      // En producción la respuesta es idéntica (no revela quién trabaja ahí). En demo se aclara para no confundir.
+      return res.json(process.env.MODO_DEMO === 'true'
+        ? { ...respuesta, demo_aviso: 'Modo demo: ese número no pertenece a ningún empleado activo. Dalo de alta en el panel de RH con ese celular.' }
+        : respuesta);
+    }
 
     const codigo = generarCodigo();
     const sal = generarSal();

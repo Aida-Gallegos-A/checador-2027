@@ -15,6 +15,7 @@ function Activar({ onListo }) {
   const [telefono, setTelefono] = useState('');
   const [codigo, setCodigo] = useState('');
   const [demo, setDemo] = useState(null);
+  const [avisoDemo, setAvisoDemo] = useState(null);
   const [error, setError] = useState(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -31,6 +32,8 @@ function Activar({ onListo }) {
       {paso === 'telefono' ? (
         <form className="formulario" onSubmit={intentar(async () => {
           const r = await yo.solicitar(telefono);
+          if (r.demo_aviso) { setAvisoDemo(r.demo_aviso); return; }
+          setAvisoDemo(null);
           setDemo(r.codigo_demo ?? null);
           setPaso('codigo');
         })}>
@@ -39,6 +42,7 @@ function Activar({ onListo }) {
           <label>Tu celular
             <input inputMode="tel" autoComplete="tel" value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="55 1234 5678" autoFocus required />
           </label>
+          {avisoDemo && <p className="nota-alerta">{avisoDemo}</p>}
           {error && <p className="error">{error}</p>}
           <button className="boton" disabled={ocupado}>Enviarme un código por WhatsApp</button>
         </form>
